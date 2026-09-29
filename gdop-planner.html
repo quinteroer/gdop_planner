@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GDOP GCP Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:        #0A1B26;
+    --panel:      #10283A;
+    --panel-2:    #132F44;
+    --line:       #2C5062;
+    --line-soft:  rgba(122,168,186,0.18);
+    --text:       #E7EEF1;
+    --text-dim:   #93AAB6;
+    --amber:      #F2A93B;
+    --amber-dim:  #C98A2E;
+    --brick:      #D0604C;
+    --teal:       #4FBE93;
+    --gdop-lo:    #1F8A5F;
+    --gdop-mid:   #E8B84B;
+    --gdop-hi:    #D0604C;
+    --radius:     10px;
+    --font-head:  'Space Grotesk', system-ui, sans-serif;
+    --font-mono:  'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); height: 100%; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    height: 100%;
+    background:
+      radial-gradient(ellipse at 15% -10%, rgba(79,190,147,0.07), transparent 45%),
+      radial-gradient(ellipse at 100% 0%, rgba(242,169,59,0.06), transparent 50%),
+      var(--ink);
+    color: var(--text);
+    font-family: var(--font-head);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- layout shell ---------- */
+  .app {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+  header.top {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 18px 22px 14px;
+    padding-top: calc(18px + env(safe-area-inset-top, 0px));
+    border-bottom: 1px solid var(--line-soft);
+    flex-wrap: wrap;
+  }
+  header.top .mark {
+    font-size: 20px;
+    line-height: 1;
+  }
+  header.top h1 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    margin: 0;
+    color: var(--text);
+  }
+  header.top .sub {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-left: auto;
+    text-align: right;
+    line-height: 1.5;
+  }
+  header.top .sub a { color: var(--teal); text-decoration: none; }
+
+  .body-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 0;
+    min-height: 0;
+  }
+  @media (max-width: 860px) {
+    .body-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- sidebar ---------- */
+  aside.controls {
+    border-right: 1px solid var(--line-soft);
+    padding: 18px;
+    overflow-y: auto;
+    max-height: calc(100vh - 64px);
+  }
+  @media (max-width: 860px) {
+    aside.controls { max-height: none; border-right: none; border-bottom: 1px solid var(--line-soft); }
+  }
+
+  .group { margin-bottom: 22px; }
+  .group h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--teal);
+    font-weight: 600;
+    margin: 0 0 10px;
+  }
+  .field { margin-bottom: 12px; }
+  .field label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    margin-bottom: 5px;
+  }
+  .field label .val {
+    font-family: var(--font-mono);
+    color: var(--text);
+    font-size: 12px;
+  }
+  input[type="range"] {
+    width: 100%;
+    height: 4px;
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--line);
+    border-radius: 3px;
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 15px; height: 15px;
+    border-radius: 50%;
+    background: var(--amber);
+    border: 2px solid var(--ink);
+    cursor: pointer;
+    box-shadow: 0 0 0 1px var(--amber-dim);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 15px; height: 15px;
+    border-radius: 50%;
+    background: var(--amber);
+    border: 2px solid var(--ink);
+    cursor: pointer;
+  }
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 0;
+    font-size: 12.5px;
+    color: var(--text-dim);
+  }
+  .switch {
+    position: relative;
+    width: 34px; height: 19px;
+    flex-shrink: 0;
+  }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider {
+    position: absolute; inset: 0;
+    background: var(--line);
+    border-radius: 20px;
+    transition: background .15s;
+    cursor: pointer;
+  }
+  .switch .slider::before {
+    content: "";
+    position: absolute;
+    width: 13px; height: 13px;
+    left: 3px; top: 3px;
+    background: var(--text-dim);
+    border-radius: 50%;
+    transition: transform .15s, background .15s;
+  }
+  .switch input:checked + .slider { background: rgba(79,190,147,0.35); }
+  .switch input:checked + .slider::before { transform: translateX(15px); background: var(--teal); }
+
+  select {
+    width: 100%;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 7px 8px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+  }
+
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 5px 10px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
+  }
+  .chip:hover { border-color: var(--teal); color: var(--text); }
+  .chip.active { border-color: var(--amber); color: var(--amber); }
+
+  /* ---------- main / canvas ---------- */
+  main.stage {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .canvas-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 360px;
+    padding: 16px;
+    display: flex;
+  }
+  #mapCanvas {
+    width: 100%;
+    height: 100%;
+    background: var(--panel);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius);
+    display: block;
+  }
+  .legend {
+    position: absolute;
+    right: 30px;
+    top: 30px;
+    background: rgba(10,27,38,0.85);
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-dim);
+    backdrop-filter: blur(4px);
+  }
+  .legend .bar {
+    width: 120px; height: 8px;
+    border-radius: 4px;
+    margin: 6px 0 4px;
+    background: linear-gradient(90deg, var(--gdop-lo), var(--gdop-mid), var(--gdop-hi));
+  }
+  .legend .ends { display: flex; justify-content: space-between; }
+
+  /* ---------- stats ---------- */
+  .stats {
+    padding: 4px 16px 20px;
+    padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .stat-card {
+    background: var(--panel);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+  }
+  .stat-card .k {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .stat-card .k .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .stat-card .v {
+    font-family: var(--font-mono);
+    font-size: 22px;
+    font-weight: 600;
+    margin-top: 4px;
+    color: var(--text);
+  }
+  .stat-card .v small { font-size: 12px; color: var(--text-dim); font-weight: 400; }
+  .stat-card .d {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    margin-top: 3px;
+  }
+  .d.pos { color: var(--teal); }
+  .d.neutral { color: var(--text-dim); }
+
+  .badge {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    padding: 2px 7px;
+    border-radius: 20px;
+    margin-top: 6px;
+  }
+  .badge.excellent { background: rgba(79,190,147,0.15); color: var(--teal); }
+  .badge.good { background: rgba(232,184,75,0.15); color: #E8B84B; }
+  .badge.marginal { background: rgba(242,169,59,0.15); color: var(--amber); }
+  .badge.problematic { background: rgba(208,96,76,0.15); color: var(--brick); }
+
+  .foot-note {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.6;
+    border-top: 1px solid var(--line-soft);
+    padding-top: 12px;
+  }
+  .foot-note b { color: var(--text); font-weight: 500; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="top">
+    <div class="mark">🛰️</div>
+    <h1>GDOP GCP Planner</h1>
+    <div class="sub">Pre-flight ground-control-point optimization<br>for UAV photogrammetry &middot; GDOP = √trace[(AᵀA)⁻¹]</div>
+  </header>
+
+  <div class="body-grid">
+    <aside class="controls" id="controls">
+
+      <div class="group">
+        <h2>Site</h2>
+        <div class="presets" id="presetRow"></div>
+        <div class="field" style="margin-top:12px;">
+          <label>Width <span class="val" id="vWidth"></span></label>
+          <input type="range" id="siteWidth" min="40" max="300" step="5">
+        </div>
+        <div class="field">
+          <label>Height <span class="val" id="vHeight"></span></label>
+          <input type="range" id="siteHeight" min="40" max="300" step="5">
+        </div>
+      </div>
+
+      <div class="group">
+        <h2>Flight</h2>
+        <div class="field">
+          <label>Altitude <span class="val" id="vAlt"></span></label>
+          <input type="range" id="altitude" min="20" max="200" step="5">
+        </div>
+        <div class="field">
+          <label>Forward overlap <span class="val" id="vFOverlap"></span></label>
+          <input type="range" id="fOverlap" min="40" max="90" step="1">
+        </div>
+        <div class="field">
+          <label>Side overlap <span class="val" id="vSOverlap"></span></label>
+          <input type="range" id="sOverlap" min="30" max="85" step="1">
+        </div>
+      </div>
+
+      <div class="group">
+        <h2>Camera</h2>
+        <div class="field">
+          <label>Sensor width <span class="val" id="vSensor"></span></label>
+          <input type="range" id="sensorWidth" min="4" max="36" step="0.5">
+        </div>
+        <div class="field">
+          <label>Focal length <span class="val" id="vFocal"></span></label>
+          <input type="range" id="focalLength" min="3" max="35" step="0.5">
+        </div>
+      </div>
+
+      <div class="group">
+        <h2>Ground control</h2>
+        <div class="field">
+          <label>Number of GCPs <span class="val" id="vGcps"></span></label>
+          <input type="range" id="numGcps" min="4" max="12" step="1">
+        </div>
+        <div class="field">
+          <label>Min. spacing <span class="val" id="vSpacing"></span></label>
+          <input type="range" id="minSpacing" min="0" max="60" step="2">
+        </div>
+      </div>
+
+      <div class="group">
+        <h2>Display</h2>
+        <div class="toggle-row">
+          <span>GDOP heatmap</span>
+          <label class="switch"><input type="checkbox" id="toggleHeatmap" checked><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <span>Flight path</span>
+          <label class="switch"><input type="checkbox" id="toggleFlight" checked><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <span>Baseline overlay</span>
+        </div>
+        <select id="baselineSelect">
+          <option value="none">None</option>
+          <option value="grid">Uniform grid</option>
+          <option value="corners">Corners + centroid</option>
+        </select>
+      </div>
+
+    </aside>
+
+    <main class="stage">
+      <div class="canvas-wrap">
+        <canvas id="mapCanvas"></canvas>
+        <div class="legend">
+          <div>GDOP (this site)</div>
+          <div class="bar"></div>
+          <div class="ends"><span id="legMin">-</span><span id="legMax">-</span></div>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stats-grid" id="statsGrid"></div>
+        <div class="foot-note">
+          <b>How to read this:</b> the heatmap shows GDOP computed from camera-to-point viewing geometry alone — no imagery needed. Amber stars are the greedy-optimized GCP set (lowest individual GDOP, picked from a dense candidate grid). Lower GDOP means stronger geometric conditioning and, per the source paper's bundle-adjustment validation, meaningfully lower reconstruction RMSE.
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------
+  // GDOP core math — direct port of gdop.py / geometry.py / optimizer.py
+  // ---------------------------------------------------------------
+
+  function fovRad(sensorWidthMm, focalLengthMm) {
+    return 2 * Math.atan(sensorWidthMm / (2 * focalLengthMm));
+  }
+  function footprintM(altitudeM, fov) {
+    return 2 * altitudeM * Math.tan(fov / 2);
+  }
+  function spacingM(footprint, overlapFrac) {
+    return footprint * (1 - overlapFrac);
+  }
+
+  function generateFlightPath(W, H, altitude, sensorWidth, focal, fOverlap, sOverlap) {
+    const fov = fovRad(sensorWidth, focal);
+    const foot = footprintM(altitude, fov);
+    const sf = Math.max(spacingM(foot, fOverlap), 2);   // along-track (y)
+    const ss = Math.max(spacingM(foot, sOverlap), 2);   // cross-track (x)
+
+    const xs = [];
+    for (let x = 0; x <= W + 1e-6; x += ss) xs.push(x);
+    if (xs[xs.length - 1] < W - 1e-6) xs.push(W);
+    const ysBase = [];
+    for (let y = 0; y <= H + 1e-6; y += sf) ysBase.push(y);
+    if (ysBase[ysBase.length - 1] < H - 1e-6) ysBase.push(H);
+
+    const cams = [];
+    xs.forEach((x, j) => {
+      const ys = j % 2 === 0 ? ysBase : ysBase.slice().reverse();
+      ys.forEach((y) => cams.push([x, y, altitude]));
+    });
+    return cams;
+  }
+
+  function generateCandidates(W, H, n) {
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        pts.push([(i / (n - 1)) * W, (j / (n - 1)) * H]);
+      }
+    }
+    return pts;
+  }
+
+  function invert3(m) {
+    const a = m[0][0], b = m[0][1], c = m[0][2];
+    const d = m[1][0], e = m[1][1], f = m[1][2];
+    const g = m[2][0], h = m[2][1], i = m[2][2];
+    const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (Math.abs(det) < 1e-12) return null;
+    const id = 1 / det;
+    return [
+      [(e * i - f * h) * id, (c * h - b * i) * id, (b * f - c * e) * id],
+      [(f * g - d * i) * id, (a * i - c * g) * id, (c * d - a * f) * id],
+      [(d * h - e * g) * id, (b * g - a * h) * id, (a * e - b * d) * id],
+    ];
+  }
+
+  function gdopAt(p, cams) {
+    if (cams.length < 3) return Infinity;
+    let ata = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    const px = p[0], py = p[1], pz = 0;
+    for (let k = 0; k < cams.length; k++) {
+      const c = cams[k];
+      const vx = px - c[0], vy = py - c[1], vz = pz - c[2];
+      const norm = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      if (norm < 1e-9) continue;
+      const ux = vx / norm, uy = vy / norm, uz = vz / norm;
+      ata[0][0] += ux * ux; ata[0][1] += ux * uy; ata[0][2] += ux * uz;
+      ata[1][0] += uy * ux; ata[1][1] += uy * uy; ata[1][2] += uy * uz;
+      ata[2][0] += uz * ux; ata[2][1] += uz * uy; ata[2][2] += uz * uz;
+    }
+    const inv = invert3(ata);
+    if (!inv) return Infinity;
+    const trace = inv[0][0] + inv[1][1] + inv[2][2];
+    if (trace < 0) return Infinity;
+    return Math.sqrt(trace);
+  }
+
+  function gdopMap(candidates, cams) {
+    return candidates.map((p) => gdopAt(p, cams));
+  }
+
+  function classifyGdop(v) {
+    if (v < 2.0) return "excellent";
+    if (v < 3.0) return "good";
+    if (v < 5.0) return "marginal";
+    return "problematic";
+  }
+
+  function greedyOptimize(candidates, gdopVals, M) {
+    const idx = candidates.map((_, i) => i);
+    idx.sort((a, b) => gdopVals[a] - gdopVals[b]);
+    const top = idx.slice(0, M);
+    return { points: top.map((i) => candidates[i]), values: top.map((i) => gdopVals[i]) };
+  }
+
+  function optimizeWithSpacing(candidates, gdopVals, M, minSpacing) {
+    if (minSpacing <= 0) return greedyOptimize(candidates, gdopVals, M);
+    const idx = candidates.map((_, i) => i);
+    idx.sort((a, b) => gdopVals[a] - gdopVals[b]);
+    const chosen = [];
+    for (const i of idx) {
+      if (chosen.length >= M) break;
+      const p = candidates[i];
+      let ok = true;
+      for (const j of chosen) {
+        const q = candidates[j];
+        const dx = p[0] - q[0], dy = p[1] - q[1];
+        if (Math.sqrt(dx * dx + dy * dy) < minSpacing) { ok = false; break; }
+      }
+      if (ok) chosen.push(i);
+    }
+    return { points: chosen.map((i) => candidates[i]), values: chosen.map((i) => gdopVals[i]) };
+  }
+
+  function gridBaseline(W, H, M) {
+    const n = Math.max(Math.round(Math.sqrt(M)), 1);
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        pts.push([n === 1 ? W / 2 : (i / (n - 1)) * W, n === 1 ? H / 2 : (j / (n - 1)) * H]);
+      }
+    }
+    return pts.slice(0, M);
+  }
+
+  function cornerBaseline(W, H, M) {
+    const corners = [[0, 0], [W, 0], [W, H], [0, H]];
+    const centroid = [W / 2, H / 2];
+    let pts = corners.concat([centroid]);
+    if (M <= pts.length) return pts.slice(0, M);
+    const mids = [];
+    for (let i = 0; i < corners.length; i++) {
+      const a = corners[i], b = corners[(i + 1) % corners.length];
+      mids.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+    }
+    pts = pts.concat(mids);
+    return pts.slice(0, M);
+  }
+
+  function randomBaselineStats(candidates, cams, M, trials) {
+    const n = candidates.length;
+    const means = [];
+    for (let t = 0; t < trials; t++) {
+      const idxSet = new Set();
+      while (idxSet.size < Math.min(M, n)) idxSet.add(Math.floor(Math.random() * n));
+      let sum = 0, count = 0;
+      idxSet.forEach((i) => {
+        const v = gdopAt(candidates[i], cams);
+        if (isFinite(v)) { sum += v; count++; }
+      });
+      means.push(count > 0 ? sum / count : Infinity);
+    }
+    const finite = means.filter(isFinite);
+    const mean = finite.reduce((a, b) => a + b, 0) / finite.length;
+    const variance = finite.reduce((a, b) => a + (b - mean) * (b - mean), 0) / finite.length;
+    return { mean, std: Math.sqrt(variance) };
+  }
+
+  function meanFinite(arr) {
+    const f = arr.filter(isFinite);
+    if (!f.length) return NaN;
+    return f.reduce((a, b) => a + b, 0) / f.length;
+  }
+
+  // ---------------------------------------------------------------
+  // UI state + wiring
+  // ---------------------------------------------------------------
+
+  const PRESETS = {
+    "Small survey": { width: 100, height: 100, altitude: 60, fOverlap: 75, sOverlap: 65, sensorWidth: 13.2, focalLength: 8.8, numGcps: 5, minSpacing: 15 },
+    "Corridor":     { width: 260, height: 60,  altitude: 80, fOverlap: 80, sOverlap: 60, sensorWidth: 13.2, focalLength: 8.8, numGcps: 6, minSpacing: 20 },
+    "Large block":  { width: 220, height: 200, altitude: 110, fOverlap: 75, sOverlap: 70, sensorWidth: 23.5, focalLength: 24, numGcps: 10, minSpacing: 25 },
+  };
+
+  const el = (id) => document.getElementById(id);
+  const ids = ["siteWidth","siteHeight","altitude","fOverlap","sOverlap","sensorWidth","focalLength","numGcps","minSpacing"];
+  const inputs = {}; ids.forEach((id) => inputs[id] = el(id));
+
+  let state = null;
+
+  function loadState() {
+    try {
+      const saved = localStorage.getItem("gdopPlannerState");
+      if (saved) return JSON.parse(saved);
+    } catch (e) { /* storage unavailable — fall through to default */ }
+    return null;
+  }
+  function saveState(s) {
+    try { localStorage.setItem("gdopPlannerState", JSON.stringify(s)); } catch (e) { /* ignore */ }
+  }
+
+  function applyState(s) {
+    inputs.siteWidth.value = s.width;
+    inputs.siteHeight.value = s.height;
+    inputs.altitude.value = s.altitude;
+    inputs.fOverlap.value = s.fOverlap;
+    inputs.sOverlap.value = s.sOverlap;
+    inputs.sensorWidth.value = s.sensorWidth;
+    inputs.focalLength.value = s.focalLength;
+    inputs.numGcps.value = s.numGcps;
+    inputs.minSpacing.value = s.minSpacing;
+  }
+
+  function readState() {
+    return {
+      width: +inputs.siteWidth.value,
+      height: +inputs.siteHeight.value,
+      altitude: +inputs.altitude.value,
+      fOverlap: +inputs.fOverlap.value,
+      sOverlap: +inputs.sOverlap.value,
+      sensorWidth: +inputs.sensorWidth.value,
+      focalLength: +inputs.focalLength.value,
+      numGcps: +inputs.numGcps.value,
+      minSpacing: +inputs.minSpacing.value,
+    };
+  }
+
+  function buildPresetChips() {
+    const row = el("presetRow");
+    Object.keys(PRESETS).forEach((name, i) => {
+      const chip = document.createElement("div");
+      chip.className = "chip" + (i === 0 ? " active" : "");
+      chip.textContent = name;
+      chip.addEventListener("click", () => {
+        document.querySelectorAll(".chip").forEach((c) => c.classList.remove("active"));
+        chip.classList.add("active");
+        applyState(PRESETS[name]);
+        refreshLabels();
+        recompute();
+      });
+      row.appendChild(chip);
+    });
+  }
+
+  function refreshLabels() {
+    el("vWidth").textContent = inputs.siteWidth.value + " m";
+    el("vHeight").textContent = inputs.siteHeight.value + " m";
+    el("vAlt").textContent = inputs.altitude.value + " m";
+    el("vFOverlap").textContent = inputs.fOverlap.value + "%";
+    el("vSOverlap").textContent = inputs.sOverlap.value + "%";
+    el("vSensor").textContent = inputs.sensorWidth.value + " mm";
+    el("vFocal").textContent = inputs.focalLength.value + " mm";
+    el("vGcps").textContent = inputs.numGcps.value;
+    el("vSpacing").textContent = inputs.minSpacing.value + " m";
+  }
+
+  // ---------------------------------------------------------------
+  // Canvas rendering
+  // ---------------------------------------------------------------
+
+  const canvas = el("mapCanvas");
+  const ctx = canvas.getContext("2d");
+
+  function fitCanvas() {
+    const wrap = canvas.parentElement;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = wrap.clientWidth - 32;
+    const cssH = wrap.clientHeight - 32;
+    canvas.style.width = cssW + "px";
+    canvas.style.height = cssH + "px";
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { cssW, cssH };
+  }
+
+  function colorForT(t) {
+    // 3-stop interpolation: green (low) -> amber (mid) -> brick (high)
+    t = Math.max(0, Math.min(1, t));
+    const stops = [
+      [0.0, [31, 138, 95]],
+      [0.5, [232, 184, 75]],
+      [1.0, [208, 96, 76]],
+    ];
+    let a = stops[0], b = stops[stops.length - 1];
+    for (let i = 0; i < stops.length - 1; i++) {
+      if (t >= stops[i][0] && t <= stops[i + 1][0]) { a = stops[i]; b = stops[i + 1]; break; }
+    }
+    const span = b[0] - a[0] || 1;
+    const local = (t - a[0]) / span;
+    const r = a[1][0] + (b[1][0] - a[1][0]) * local;
+    const g = a[1][1] + (b[1][1] - a[1][1]) * local;
+    const bl = a[1][2] + (b[1][2] - a[1][2]) * local;
+    return `rgb(${r | 0}, ${g | 0}, ${bl | 0})`;
+  }
+
+  function render(data) {
+    const { cssW, cssH } = fitCanvas();
+    ctx.clearRect(0, 0, cssW, cssH);
+
+    const pad = 26;
+    const { W, H } = data;
+    const scale = Math.min((cssW - pad * 2) / W, (cssH - pad * 2) / H);
+    const offX = (cssW - W * scale) / 2;
+    const offY = (cssH - H * scale) / 2;
+    const toPx = (x, y) => [offX + x * scale, offY + (H - y) * scale];
+
+    // background grid (blueprint feel)
+    ctx.strokeStyle = "rgba(122,168,186,0.08)";
+    ctx.lineWidth = 1;
+    const gridStep = 20;
+    for (let gx = 0; gx <= W; gx += gridStep) {
+      const [x1, y1] = toPx(gx, 0), [x2, y2] = toPx(gx, H);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+    for (let gy = 0; gy <= H; gy += gridStep) {
+      const [x1, y1] = toPx(0, gy), [x2, y2] = toPx(W, gy);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+
+    // heatmap
+    if (data.showHeatmap) {
+      const r = Math.max(scale * (W / Math.sqrt(data.candidates.length)) * 0.62, 2.2);
+      const finite = data.gdopVals.filter(isFinite);
+      const vmin = Math.min(...finite), vmax = Math.max(...finite);
+      const range = (vmax - vmin) || 1;
+      data.candidates.forEach((p, i) => {
+        const v = data.gdopVals[i];
+        if (!isFinite(v)) return;
+        const t = (v - vmin) / range;
+        const [x, y] = toPx(p[0], p[1]);
+        ctx.fillStyle = colorForT(t);
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      });
+      ctx.globalAlpha = 1;
+      el("legMin").textContent = vmin.toFixed(2);
+      el("legMax").textContent = vmax.toFixed(2);
+    } else {
+      el("legMin").textContent = "-";
+      el("legMax").textContent = "-";
+    }
+
+    // boundary
+    ctx.strokeStyle = "#4A90A4";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(...toPx(0, H), W * scale, H * scale);
+
+    // flight path
+    if (data.showFlight) {
+      ctx.strokeStyle = "rgba(231,238,241,0.35)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      data.cams.forEach((c, i) => {
+        const [x, y] = toPx(c[0], c[1]);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.fillStyle = "rgba(231,238,241,0.55)";
+      data.cams.forEach((c) => {
+        const [x, y] = toPx(c[0], c[1]);
+        ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI * 2); ctx.fill();
+      });
+    }
+
+    // baseline overlay
+    if (data.baselinePts && data.baselinePts.length) {
+      ctx.fillStyle = "#D0604C";
+      ctx.strokeStyle = "#0A1B26";
+      ctx.lineWidth = 1.5;
+      data.baselinePts.forEach((p) => {
+        const [x, y] = toPx(p[0], p[1]);
+        ctx.beginPath(); ctx.rect(x - 5, y - 5, 10, 10); ctx.fill(); ctx.stroke();
+      });
+    }
+
+    // optimized GCPs (stars)
+    ctx.fillStyle = "#F2A93B";
+    ctx.strokeStyle = "#0A1B26";
+    ctx.lineWidth = 1.5;
+    data.optimized.points.forEach((p) => {
+      const [x, y] = toPx(p[0], p[1]);
+      drawStar(x, y, 5, 9, 4);
+    });
+  }
+
+  function drawStar(cx, cy, spikes, outerR, innerR) {
+    let rot = Math.PI / 2 * 3;
+    let x = cx, y = cy;
+    const step = Math.PI / spikes;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - outerR);
+    for (let i = 0; i < spikes; i++) {
+      x = cx + Math.cos(rot) * outerR; y = cy + Math.sin(rot) * outerR;
+      ctx.lineTo(x, y); rot += step;
+      x = cx + Math.cos(rot) * innerR; y = cy + Math.sin(rot) * innerR;
+      ctx.lineTo(x, y); rot += step;
+    }
+    ctx.lineTo(cx, cy - outerR);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+  }
+
+  // ---------------------------------------------------------------
+  // Stats panel
+  // ---------------------------------------------------------------
+
+  function pctImprove(baseline, optimized) {
+    if (!isFinite(baseline) || baseline === 0) return null;
+    return (100 * (baseline - optimized) / baseline);
+  }
+
+  function statCard(label, dotColor, value, sub, badgeCls, badgeText) {
+    const div = document.createElement("div");
+    div.className = "stat-card";
+    div.innerHTML = `
+      <div class="k"><span class="dot" style="background:${dotColor}"></span>${label}</div>
+      <div class="v">${value}</div>
+      ${sub ? `<div class="d ${sub.cls}">${sub.text}</div>` : ""}
+      ${badgeText ? `<span class="badge ${badgeCls}">${badgeText}</span>` : ""}
+    `;
+    return div;
+  }
+
+  function renderStats(d) {
+    const grid = el("statsGrid");
+    grid.innerHTML = "";
+
+    const optMean = meanFinite(d.optimized.values);
+    grid.appendChild(statCard(
+      "GDOP-optimized", "#F2A93B",
+      optMean.toFixed(3), null,
+      classifyGdop(optMean), classifyGdop(optMean)
+    ));
+
+    const gridMean = meanFinite(gdopMap(d.gridPts, d.cams));
+    const gImp = pctImprove(gridMean, optMean);
+    grid.appendChild(statCard(
+      "vs. uniform grid", "#D0604C",
+      gridMean.toFixed(3),
+      { cls: "pos", text: gImp !== null ? `optimized is ${gImp.toFixed(1)}% lower` : "—" }
+    ));
+
+    const cornerMean = meanFinite(gdopMap(d.cornerPts, d.cams));
+    const cImp = pctImprove(cornerMean, optMean);
+    grid.appendChild(statCard(
+      "vs. corners+centroid", "#D0604C",
+      cornerMean.toFixed(3),
+      { cls: "pos", text: cImp !== null ? `optimized is ${cImp.toFixed(1)}% lower` : "—" }
+    ));
+
+    const rImp = pctImprove(d.randomStats.mean, optMean);
+    grid.appendChild(statCard(
+      "vs. random (300 trials)", "#93AAB6",
+      d.randomStats.mean.toFixed(3) + ` <small>&plusmn; ${d.randomStats.std.toFixed(3)}</small>`,
+      { cls: "pos", text: rImp !== null ? `optimized is ${rImp.toFixed(1)}% lower` : "—" }
+    ));
+  }
+
+  // ---------------------------------------------------------------
+  // Main recompute loop
+  // ---------------------------------------------------------------
+
+  let lastData = null;
+
+  function recompute() {
+    const s = readState();
+    saveState(s);
+
+    const cams = generateFlightPath(s.width, s.height, s.altitude, s.sensorWidth, s.focalLength, s.fOverlap / 100, s.sOverlap / 100);
+    const nSide = 26;
+    const candidates = generateCandidates(s.width, s.height, nSide);
+    const gdopVals = gdopMap(candidates, cams);
+
+    const optimized = optimizeWithSpacing(candidates, gdopVals, s.numGcps, s.minSpacing);
+    const gridPts = gridBaseline(s.width, s.height, s.numGcps);
+    const cornerPts = cornerBaseline(s.width, s.height, s.numGcps);
+    const randomStats = randomBaselineStats(candidates, cams, s.numGcps, 300);
+
+    const baselineChoice = el("baselineSelect").value;
+    const baselinePts = baselineChoice === "grid" ? gridPts : baselineChoice === "corners" ? cornerPts : [];
+
+    lastData = {
+      W: s.width, H: s.height,
+      cams, candidates, gdopVals,
+      optimized, gridPts, cornerPts, randomStats,
+      baselinePts,
+      showHeatmap: el("toggleHeatmap").checked,
+      showFlight: el("toggleFlight").checked,
+    };
+
+    render(lastData);
+    renderStats(lastData);
+  }
+
+  // debounce heavy recompute slightly while dragging
+  let debounceTimer = null;
+  function onInput() {
+    refreshLabels();
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(recompute, 40);
+  }
+
+  ids.forEach((id) => inputs[id].addEventListener("input", onInput));
+  el("toggleHeatmap").addEventListener("change", recompute);
+  el("toggleFlight").addEventListener("change", recompute);
+  el("baselineSelect").addEventListener("change", recompute);
+  window.addEventListener("resize", () => lastData && render(lastData));
+
+  // ---------------------------------------------------------------
+  // Init
+  // ---------------------------------------------------------------
+
+  buildPresetChips();
+  const initial = loadState() || PRESETS["Small survey"];
+  applyState(initial);
+  refreshLabels();
+  recompute();
+
+})();
+</script>
+</body>
+</html>
