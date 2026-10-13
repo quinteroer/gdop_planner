@@ -1,0 +1,56 @@
+const assert = require('assert');
+const {solve,route,cameras,trajectory} = require('./optimizer.js');
+const state = {width:230,height:60,sensorWidth:13.2,focalLength:8.8,numGcps:5,minSpacing:16};
+const limits = {minAltitude:20,maxAltitude:60,minClearance:20,minForward:75,maxForward:85,minSide:65,maxSide:75,maxGdop:2,maxPhotos:1500};
+(async () => {
+  const evaluate = () => ({worstGdop:1});
+  const low = await solve(state,{...limits,priority:'height'},{ground:0,highest:3},evaluate);
+  assert.equal(low.plan.state.altitude,25);
+  const otherAxis = low.plan.route.axis === 'east-west' ? 'north-south' : 'east-west';
+  assert(low.plan.route.distance <= route(low.plan.state,otherAxis,0,3).distance);
+  const short = await solve(state,{...limits,priority:'distance'},{ground:0,highest:3},evaluate);
+  assert(short.plan.route.distance <= low.plan.route.distance);
+  const balanced = await solve(state,{...limits,priority:'balanced'},{ground:0,highest:3},evaluate);
+  assert(balanced.plan.state.altitude >= 25);
+  // Every generated spacing must respect overlap at the highest terrain sample.
+  for (const plan of [low.plan,short.plan,balanced.plan]) {
+    const foot = (plan.state.altitude-3)*state.sensorWidth/state.focalLength;
+    const r = plan.route;
+    const across = r.axis==='east-west' ? state.height : state.width;
+    const along = r.axis==='east-west' ? state.width : state.height;
+    assert(across/(r.rows-1) <= foot*(1-plan.state.sOverlap/100)+1e-9);
+    assert(along/(r.perRow-1) <= foot*(1-plan.state.fOverlap/100)+1e-9);
+    const cams = cameras(plan.state,r,0);
+    const distance = cams.slice(1).reduce((sum,c,i)=>sum+Math.hypot(c[0]-cams[i][0],c[1]-cams[i][1]),0);
+    assert(Math.abs(distance-r.distance)<1e-7);
+  }
+  const none = await solve(state,limits,{ground:0,highest:100},evaluate);
+  assert.equal(none.plan,null);
+  const rejected = await solve(state,limits,{ground:0,highest:0},()=>null);
+  assert.equal(rejected.plan,null);
+  assert.equal(rejected.tested,rejected.total);
+  await assert.rejects(solve(state,{...limits,minAltitude:80,maxAltitude:20},{ground:0,highest:0},evaluate));
+  const curved = await solve(state,{...limits,priority:'distance',pathMode:'curved',turnRadius:5,turnBuffer:10},{ground:0,highest:3},evaluate);
+  assert(curved.plan);
+  const cr = curved.plan.route;
+  assert.equal(cr.style,'curved');
+  const straight = route(curved.plan.state,cr.axis,0,3);
+  assert(Math.abs(cr.distance-straight.distance-(cr.rows-1)*(Math.PI-2)*5)<1e-8);
+  const trace = trajectory(curved.plan.state,cr,0);
+  assert.equal(trace.filter(p=>p.capture).length,cr.photos);
+  assert.deepEqual(trace.filter(p=>p.capture).map(p=>p.position),curved.plan.cams);
+  const alongIndex = cr.axis==='north-south' ? 1 : 0;
+  const span = alongIndex===1 ? state.height : state.width;
+  const extra = trace.filter(p=>!p.capture).map(p=>p.position[alongIndex]);
+  assert(extra.some(v=>v>span));
+  assert(extra.every(v=>v>=-5-1e-8 && v<=span+5+1e-8));
+  const approx = trace.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p.position[0]-trace[i].position[0],p.position[1]-trace[i].position[1]),0);
+  assert(Math.abs(approx/cr.distance-1)<0.001);
+  const noBuffer = await solve(state,{...limits,pathMode:'curved',turnRadius:5,turnBuffer:1},{ground:0,highest:0},evaluate);
+  assert.equal(noBuffer.plan,null);
+  const compare = await solve(state,{...limits,priority:'distance',pathMode:'auto',turnRadius:5,turnBuffer:20},{ground:0,highest:0},evaluate);
+  assert.equal(compare.plan.route.style,'straight');
+  assert.equal(route({...state,altitude:20,fOverlap:75,sOverlap:85},'east-west',0,0,'curved',10,20),null);
+  await assert.rejects(solve(state,{...limits,pathMode:'curved',turnRadius:0,turnBuffer:20},{ground:0,highest:0},evaluate));
+  console.log('Optimizer priority, overlap, clearance, distance, infeasibility and validation tests passed.');
+})().catch(e=>{console.error(e);process.exit(1)});
