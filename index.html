@@ -350,7 +350,7 @@
         <h2>Flight</h2>
         <div class="field">
           <label>Altitude above reference <span class="val" id="vAlt"></span></label>
-          <input type="range" id="altitude" min="20" max="200" step="5">
+          <input type="range" id="altitude" min="10" max="200" step="5">
         </div>
         <div class="field">
           <label>Forward overlap <span class="val" id="vFOverlap"></span></label>
@@ -389,7 +389,7 @@
       <div class="group">
         <h2>Display</h2>
         <div class="toggle-row">
-          <span>GDOP heatmap</span>
+          <span>Visible geometry heatmap</span>
           <label class="switch"><input type="checkbox" id="toggleHeatmap" checked><span class="slider"></span></label>
         </div>
         <div class="toggle-row">
@@ -412,7 +412,7 @@
       <div class="canvas-wrap">
         <canvas id="mapCanvas"></canvas>
         <div class="legend">
-          <div>GDOP (this site)</div>
+          <div>Visible geometry · not RMSE</div>
           <div class="bar"></div>
           <div class="ends"><span id="legMin">-</span><span id="legMax">-</span></div>
         </div>
@@ -421,7 +421,7 @@
       <div class="stats">
         <div class="stats-grid" id="statsGrid"></div>
         <div class="foot-note">
-          <b>How to read this:</b> the heatmap shows GDOP computed from camera-to-point viewing geometry alone — no imagery needed. Amber stars are the greedy-optimized GCP set (lowest individual GDOP, picked from a dense candidate grid). Survey mode uses attached orthomosaics and sampled DTM elevations. GDOP is calculated from a simulated flight, not measured flight logs. Lower GDOP indicates stronger geometry in this model; it does not establish survey accuracy. Heights use the GeoTIFF EGM96 datum. Missing terrain is excluded. GCP placement requires field review.
+          <b>How to read this:</b> the heatmap is a dimensionless geometry diagnostic using only photo positions whose nadir rectangular footprints contain each terrain sample. It is not predicted RMSE. Amber stars are a distributed GCP network improved through multiple starts and point exchanges, or the legacy comparison when selected. Network coverage is the maximum distance from a terrain candidate to a selected GCP, not a measurement error. Placement exclusions need manual review. DTM-derived coordinates are planning suggestions, not surveyed control. One-centimeter accuracy requires independent surveyed checkpoints; occlusion, obstacles and reconstruction covariance remain unmodeled.
         </div>
       </div>
     </main>
@@ -430,6 +430,8 @@
 
 <script src="sites.js"></script>
 <script src="optimizer.js"></script>
+<script src="app-model.js"></script>
+<script src="gcp-network.js"></script>
 <script>
 (function () {
   "use strict";
@@ -613,6 +615,7 @@
 
   const el = (id) => document.getElementById(id);
   let activeSite = null, siteImage = null, optimizedPlan = null;
+  let exclusions = [], mapTransform = null;
   const surveys = window.SURVEY_SITES || [];
   const group = document.createElement('div');
   group.className = 'group';
@@ -621,23 +624,60 @@
   const optimization = document.createElement('div');
   optimization.className = 'group';
   optimization.innerHTML = `<h2>Optimize mission</h2>
-    <div class="field"><label for="priority">Priority</label><select id="priority"><option value="balanced">Balance distance and height</option><option value="distance">Shortest flight first</option><option value="height">Lowest altitude first</option></select></div>
+    <div class="field"><label for="priority">Priority</label><select id="priority"><option value="time">Shortest estimated flight time</option><option value="balanced">Balance distance and height</option><option value="distance">Shortest flight first</option><option value="height">Lowest altitude first</option></select></div>
     <div class="field"><label for="pathMode">Flight path style</label><select id="pathMode"><option value="straight">Straight survey lines</option><option value="curved">Survey lines with curved turns</option><option value="auto">Compare both styles</option></select></div>
-    <div class="field"><label for="turnRadius">Curve radius (m)</label><input id="turnRadius" type="number" value="5" min="0.1" max="100" step="0.5"></div>
+    <div class="field"><label for="turnRadius">Curve radius (m)</label><input id="turnRadius" type="number" value="2" min="0.1" max="100" step="0.5"></div>
     <div class="field"><label for="turnBuffer">Allowed turn extension outside site (m)</label><input id="turnBuffer" type="number" value="20" min="0" max="100"></div>
     <p style="font-size:12px;line-height:1.5;color:var(--text-dim)">Curves connect straight photo lines outside the site. Photos are off during turns. Turns add distance; time savings from smoother flying are not modeled. Terrain beyond the survey is unverified.</p>
-    <div class="field"><label>Altitude range above reference (m)</label><input aria-label="Minimum altitude" id="minAltitude" type="number" value="20" min="20" max="200"> <input aria-label="Maximum altitude" id="maxAltitude" type="number" value="120" min="20" max="200"></div>
-    <div class="field"><label for="minClearance">Minimum sampled terrain clearance (m)</label><input id="minClearance" type="number" value="20" min="1"></div>
-    <div class="field"><label>Forward overlap range (%)</label><input aria-label="Minimum forward overlap" id="minForward" type="number" value="75" min="40" max="90"> <input aria-label="Maximum forward overlap" id="maxForward" type="number" value="90" min="40" max="90"></div>
-    <div class="field"><label>Side overlap range (%)</label><input aria-label="Minimum side overlap" id="minSide" type="number" value="65" min="30" max="85"> <input aria-label="Maximum side overlap" id="maxSide" type="number" value="85" min="30" max="85"></div>
-    <div class="field"><label for="maxGdop">Maximum GDOP at every terrain candidate</label><input id="maxGdop" type="number" value="2" min="0.01" step="0.1"></div>
-    <div class="field"><label for="maxPhotos">Maximum photo positions</label><input id="maxPhotos" type="number" value="1500" min="3" max="5000"></div>
-    <p style="font-size:12px;line-height:1.5;color:var(--text-dim)">Uses your selected camera, GCP count and spacing. Searches both flight directions, altitude and overlap. Lower altitude usually requires more flying. Square camera footprint assumed.</p>
+    <div class="field"><label>Altitude range above reference (m)</label><input aria-label="Minimum altitude" id="minAltitude" type="number" value="15" min="10" max="200"> <input aria-label="Maximum altitude" id="maxAltitude" type="number" value="60" min="10" max="200"></div>
+    <div class="field"><label for="minClearance">Minimum sampled terrain clearance (m)</label><input id="minClearance" type="number" value="15" min="1"></div>
+    <div class="field"><label>Forward overlap range (%)</label><input aria-label="Minimum forward overlap" id="minForward" type="number" value="80" min="40" max="90"> <input aria-label="Maximum forward overlap" id="maxForward" type="number" value="85" min="40" max="90"></div>
+    <div class="field"><label>Side overlap range (%)</label><input aria-label="Minimum side overlap" id="minSide" type="number" value="80" min="30" max="85"> <input aria-label="Maximum side overlap" id="maxSide" type="number" value="85" min="30" max="85"></div>
+    <div class="field"><label for="maxGdop">Maximum visible geometry diagnostic</label><input id="maxGdop" type="number" value="10" min="0.01" step="0.1"></div>
+    <div class="field"><label for="maxPhotos">Maximum photo positions</label><input id="maxPhotos" type="number" value="3000" min="3" max="5000"></div>
+    <p style="font-size:12px;line-height:1.5;color:var(--text-dim)">Uses your selected camera, GCP count and spacing. Searches both flight directions, altitude and overlap. Searches capture-feasible speeds and rectangular footprints. Geometry scores are dimensionless; they are not RMSE.</p>
     <button class="chip" id="optimizeMission">Optimize everything</button>
     <button class="chip" id="exportFlight" disabled>Export flight CSV</button>
     <p id="optimizationStatus" role="status" aria-live="polite" style="font-size:12px;line-height:1.6"></p>`;
   group.after(optimization);
-  optimization.querySelectorAll('input').forEach(input => { input.style.cssText = 'width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:7px;margin-bottom:4px'; });
+  function numberField(id,label,value,min,max,step='any') {
+    const div=document.createElement('div');div.className='field';
+    div.innerHTML=`<label for="${id}">${label}</label><input id="${id}" type="number" value="${value}" min="${min}" max="${max}" step="${step}">`;
+    return div;
+  }
+  const acquisition=document.createElement('div');
+  acquisition.innerHTML=`<h2>Camera and control network</h2>
+    <div class="field"><label for="cameraProfile">Camera profile</label><select id="cameraProfile"><option value="mini48">Mini 4 Pro 48 MP · 5 s timed capture</option><option value="mini12">Mini 4 Pro 12 MP · 2 s timed capture</option><option value="custom">Custom camera · geometry only</option></select></div>
+    <div class="field"><label for="cameraOrientation">Image dimension along flight</label><select id="cameraOrientation"><option value="shortAlong">Short dimension</option><option value="longAlong">Long dimension</option></select><label><input id="compareOrientations" type="checkbox" checked> Compare both orientations</label></div>
+    <div class="field"><label for="gcpMethod">GCP selection</label><select id="gcpMethod"><option value="network">Distributed multi-start exchange</option><option value="greedy">Legacy individual-score greedy comparison</option></select></div>
+    <p style="font-size:12px;line-height:1.5">82.1° diagonal FOV; 24 mm is equivalent focal length. Nadir rectangular footprints only. Occlusion, aircraft dynamics and rolling-shutter deformation are not modeled. 1 cm RMSE requires independent checkpoints.</p>`;
+  for(const row of [
+    ['maxGsd','Maximum GSD (cm/pixel)',.5,.1,10],
+    ['minSpeed','Minimum speed (m/s)',.3,.1,16],
+    ['maxSpeed','Maximum speed (m/s)',5,.1,16],
+    ['shutterDenominator','Exposure 1/N seconds',1000,1,8000],
+    ['blurPixels','Maximum translation blur (pixels)',.5,.1,10],
+    ['minViews','Minimum visible photos per terrain candidate',4,3,100,'1'],
+    ['minViewAngle','Minimum viewing spread (degrees)',10,0,90],
+    ['customSensorHeight','Custom sensor height (mm)',13,1,36],
+    ['excludeRadius','GCP placement exclusion radius (m)',15,1,100]]) acquisition.appendChild(numberField(...row));
+  const mask=document.createElement('div');
+  mask.innerHTML='<label><input id="excludeMode" type="checkbox"> Click map to exclude GCP placement</label><button class="chip" id="clearExclusions">Clear placement exclusions</button><p style="font-size:12px">Exclusions filter targets, not coverage or flight clearance. Review water, access and stable surfaces manually.</p>';
+  acquisition.appendChild(mask);
+  optimization.prepend(acquisition);
+  function numeric(id) { return el(id).value.trim()==='' ? NaN : Number(el(id).value); }
+  function placementAllowed(p) { return !exclusions.some(e=>Math.hypot(p[0]-e.x,p[1]-e.y)<e.radius); }
+  function selectGcps(points,analysis,state,method=el('gcpMethod').value) {
+    const allowed=(p,i)=>placementAllowed(p) && analysis.counts[i]>=numeric('minViews') && analysis.angles[i]>=numeric('minViewAngle');
+    const values=analysis.values.map((v,i)=>allowed(points[i],i)?v:Infinity);
+    if(method==='greedy') {
+      const selected=optimizeWithSpacing(points,values,state.numGcps,state.minSpacing);
+      return {...selected,method:'Legacy greedy comparison',maxDistance:points.length&&selected.points.length?Math.max(...points.map(p=>Math.min(...selected.points.map(q=>Math.hypot(p[0]-q[0],p[1]-q[1]))))):Infinity};
+    }
+    return GcpNetwork.optimize(points,values,state.numGcps,state.minSpacing,{allowed,demands:points});
+  }
+
+  optimization.querySelectorAll('input[type="number"]').forEach(input => { input.style.cssText = 'width:100%;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:7px;margin-bottom:4px'; });
   function invalidatePlan() {
     optimizedPlan = null;
     el('exportFlight').disabled = true;
@@ -674,6 +714,8 @@
   }
 
   function applyState(s) {
+    if(s.cameraProfile)el('cameraProfile').value=s.cameraProfile;
+    if(s.cameraOrientation)el('cameraOrientation').value=s.cameraOrientation;
     inputs.siteWidth.value = s.width;
     inputs.siteHeight.value = s.height;
     inputs.altitude.value = s.altitude;
@@ -696,6 +738,8 @@
       focalLength: +inputs.focalLength.value,
       numGcps: +inputs.numGcps.value,
       minSpacing: +inputs.minSpacing.value,
+      cameraProfile:el('cameraProfile').value,cameraOrientation:el('cameraOrientation').value,
+      sensorHeight:numeric('customSensorHeight'),
     };
   }
 
@@ -781,6 +825,7 @@
     const scale = Math.min((cssW - pad * 2) / (W+2*curveMargin), (cssH - pad * 2) / (H+2*curveMargin));
     const offX = (cssW - W * scale) / 2;
     const offY = (cssH - H * scale) / 2;
+    mapTransform={offX,offY,scale,H};
     const toPx = (x, y) => [offX + x * scale, offY + (H - y) * scale];
 
     if (siteImage && siteImage.complete && siteImage.naturalWidth) ctx.drawImage(siteImage, offX, offY, W * scale, H * scale);
@@ -813,8 +858,8 @@ const r = Math.max(scale * Math.max(W, H) / ((activeSite?.gridSize || 26) - 1) *
         ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
       });
       ctx.globalAlpha = 1;
-      el("legMin").textContent = vmin.toFixed(2);
-      el("legMax").textContent = vmax.toFixed(2);
+      el("legMin").textContent = finite.length ? vmin.toFixed(2) : "Unavailable";
+      el("legMax").textContent = finite.length ? vmax.toFixed(2) : "Unavailable";
     } else {
       el("legMin").textContent = "-";
       el("legMax").textContent = "-";
@@ -853,6 +898,8 @@ const r = Math.max(scale * Math.max(W, H) / ((activeSite?.gridSize || 26) - 1) *
       });
     }
 
+    ctx.strokeStyle='#E07C73';ctx.lineWidth=2;
+    exclusions.forEach(e=>{const [x,y]=toPx(e.x,e.y);ctx.beginPath();ctx.arc(x,y,e.radius*scale,0,2*Math.PI);ctx.stroke();});
     // optimized GCPs (stars)
     ctx.fillStyle = "#F2A93B";
     ctx.strokeStyle = "#0A1B26";
@@ -902,38 +949,12 @@ const r = Math.max(scale * Math.max(W, H) / ((activeSite?.gridSize || 26) - 1) *
   }
 
   function renderStats(d) {
-    const grid = el("statsGrid");
-    grid.innerHTML = "";
-
-    const optMean = meanFinite(d.optimized.values);
-    grid.appendChild(statCard(
-      "GDOP-optimized", "#F2A93B",
-      optMean.toFixed(3), null,
-      classifyGdop(optMean), classifyGdop(optMean)
-    ));
-
-    const gridMean = meanFinite(gdopMap(d.gridPts, d.cams));
-    const gImp = pctImprove(gridMean, optMean);
-    grid.appendChild(statCard(
-      `Uniform grid (${d.gridPts.length} points)`, "#D0604C",
-Number.isFinite(gridMean) ? gridMean.toFixed(3) : "No terrain",
-      { cls: "neutral", text: gImp !== null ? `optimized is ${Math.abs(gImp).toFixed(1)}% ${gImp >= 0 ? "lower" : "higher"}` : "—" }
-    ));
-
-    const cornerMean = meanFinite(gdopMap(d.cornerPts, d.cams));
-    const cImp = pctImprove(cornerMean, optMean);
-    grid.appendChild(statCard(
-      `Corners+center (${d.cornerPts.length} points)`, "#D0604C",
-Number.isFinite(cornerMean) ? cornerMean.toFixed(3) : "No terrain",
-      { cls: "neutral", text: cImp !== null ? `optimized is ${Math.abs(cImp).toFixed(1)}% ${cImp >= 0 ? "lower" : "higher"}` : "—" }
-    ));
-
-    const rImp = pctImprove(d.randomStats.mean, optMean);
-    grid.appendChild(statCard(
-      "vs. random (300 trials)", "#93AAB6",
-      d.randomStats.mean.toFixed(3) + ` <small>&plusmn; ${d.randomStats.std.toFixed(3)}</small>`,
-      { cls: "pos", text: rImp !== null ? `optimized is ${rImp.toFixed(1)}% lower` : "—" }
-    ));
+    const grid=el('statsGrid');grid.innerHTML='';
+    const fmt=v=>Number.isFinite(v)?v.toFixed(2):'Unavailable';
+    grid.appendChild(statCard('Visible geometry diagnostic','#4FBE93',fmt(meanFinite(d.gdopVals)),{cls:'neutral',text:'Dimensionless · not RMSE'}));
+    grid.appendChild(statCard('GCP network coverage','#F2A93B',fmt(d.optimized.maxDistance)+' <small>m</small>',{cls:'neutral',text:`${d.optimized.points.length}/${d.state.numGcps} targets · ${d.optimized.method}`}));
+    grid.appendChild(statCard('Image resolution','#93AAB6',d.route?.gsd?fmt(d.route.gsd*100)+' <small>cm/px</small>':'Unknown',{cls:'neutral',text:'Worst sampled GSD · not accuracy'}));
+    grid.appendChild(statCard('Mission estimate','#93AAB6',d.route?fmt(d.route.time/60)+' <small>min</small>':'Unavailable',{cls:'neutral',text:d.route?`${d.route.photos} photos · ${fmt(d.route.speed)} m/s · constant-speed only`:'No route fits preview settings'}));
   }
 
   // ---------------------------------------------------------------
@@ -943,37 +964,25 @@ Number.isFinite(cornerMean) ? cornerMean.toFixed(3) : "No terrain",
   let lastData = null;
 
   function recompute() {
-    const s = readState();
-    saveState(s);
-
-    if (activeSite) { s.width = activeSite.width; s.height = activeSite.height; }
-    const cams = optimizedPlan ? optimizedPlan.cams : generateFlightPath(s.width, s.height, s.altitude, s.sensorWidth, s.focalLength, s.fOverlap / 100, s.sOverlap / 100);
-    if (activeSite && !optimizedPlan) cams.forEach(c => c[2] += activeSite.groundReference);
-    const nSide = activeSite ? activeSite.gridSize : 26;
-    const candidates = surveyPoints(generateCandidates(s.width, s.height, nSide));
-    const gdopVals = gdopMap(candidates, cams);
-
-    const optimized = optimizeWithSpacing(candidates, gdopVals, s.numGcps, s.minSpacing);
-    const gridPts = surveyPoints(gridBaseline(s.width, s.height, s.numGcps));
-    const cornerPts = surveyPoints(cornerBaseline(s.width, s.height, s.numGcps));
-    const randomStats = randomBaselineStats(candidates, cams, s.numGcps, 300);
-
-    const baselineChoice = el("baselineSelect").value;
-    const baselinePts = baselineChoice === "grid" ? gridPts : baselineChoice === "corners" ? cornerPts : [];
-
-    lastData = {
-      W: s.width, H: s.height,
-      cams, candidates, gdopVals,
-      path: optimizedPlan?.path.map(p=>p.position),
-      optimized, gridPts, cornerPts, randomStats,
-      baselinePts,
-      showHeatmap: el("toggleHeatmap").checked,
-      showFlight: el("toggleFlight").checked,
-    };
-
-    render(lastData);
-    renderStats(lastData);
-    if (activeSite) el('surveyInfo').textContent = `${activeSite.name}: ${s.width.toFixed(1)} × ${s.height.toFixed(1)} m. ${candidates.length} terrain candidates; ${optimized.points.length}/${s.numGcps} GCPs selected. ${activeSite.crs}; ${activeSite.verticalDatum} heights. Simulated flight ${s.altitude} m above median terrain. No visibility or obstacle checks.`;
+    const s=readState();saveState(s);
+    if(activeSite){s.width=activeSite.width;s.height=activeSite.height;}
+    inputs.sensorWidth.closest('.group').style.display=s.cameraProfile==='custom'?'':'none';
+    const ground=activeSite?.groundReference || 0;
+    const terrain=activeSite?.elevations.filter(v=>v!==null) || [0];
+    const route=optimizedPlan?.route || FlightOptimizer.route(s,'north-south',ground,Math.max(...terrain));
+    const cams=optimizedPlan?.cams || (route && route.photos<=5000 ? FlightOptimizer.cameras(s,route,ground):[]);
+    if(route && !optimizedPlan){const f=FlightOptimizer.footprint(ground+s.altitude-Math.min(...terrain),s);route.gsd=f.gsd;route.speed=numeric('maxSpeed');route.time=route.distance/route.speed;}
+    const candidates=surveyPoints(generateCandidates(s.width,s.height,activeSite?.gridSize || 26));
+    const analysis=PlannerModel.analyze(candidates,cams,s,route?.axis || 'north-south');
+    const optimized=optimizedPlan?.gcps || selectGcps(candidates,analysis,s);
+    const gridPts=surveyPoints(gridBaseline(s.width,s.height,s.numGcps));
+    const cornerPts=surveyPoints(cornerBaseline(s.width,s.height,s.numGcps));
+    const choice=el('baselineSelect').value;
+    lastData={W:s.width,H:s.height,state:s,route,cams,candidates,analysis,gdopVals:analysis.values,optimized,gridPts,cornerPts,
+      path:optimizedPlan?.path.map(p=>p.position),baselinePts:choice==='grid'?gridPts:choice==='corners'?cornerPts:[],
+      showHeatmap:el('toggleHeatmap').checked,showFlight:el('toggleFlight').checked};
+    render(lastData);renderStats(lastData);
+    el('surveyInfo').textContent=`${activeSite?.name || 'Synthetic site'}: ${s.width.toFixed(1)} × ${s.height.toFixed(1)} m; ${candidates.length} terrain candidates; ${optimized.points.length}/${s.numGcps} GCPs selected. ${activeSite?.crs || 'local'}; ${activeSite?.verticalDatum || 'local'} heights. Nadir footprint visibility only; no occlusion/obstacle checks. ${optimizedPlan?'Applied search result.':'Manual preview has not passed mission constraints.'}`;
   }
 
   // debounce heavy recompute slightly while dragging
@@ -996,6 +1005,7 @@ Number.isFinite(cornerMean) ? cornerMean.toFixed(3) : "No terrain",
   // ---------------------------------------------------------------
 
   function selectSurvey() {
+    exclusions=[];
     invalidatePlan();
     activeSite = surveys.find(site => site.id === el('surveySelect').value) || null;
     siteImage = null;
@@ -1011,7 +1021,7 @@ Number.isFinite(cornerMean) ? cornerMean.toFixed(3) : "No terrain",
   el('surveySelect').addEventListener('change', selectSurvey);
   el('exportGcps').addEventListener('click', () => {
     if (!lastData) return;
-    const rows = ['id,easting_m,northing_m,elevation_m,gdop,crs,vertical_datum'];
+    const rows = ['id,easting_m,northing_m,elevation_m,visible_geometry_score,crs,vertical_datum'];
     lastData.optimized.points.forEach((p,i) => rows.push(['GCP'+(i+1), (p[0]+(activeSite?.west || 0)).toFixed(3), (p[1]+(activeSite?.south || 0)).toFixed(3), (p[2] || 0).toFixed(3), lastData.optimized.values[i].toFixed(6), activeSite?.crs || 'local', activeSite?.verticalDatum || 'local'].join(',')));
     const url = URL.createObjectURL(new Blob([rows.join('\n')], {type:'text/csv'}));
     const a = document.createElement('a'); a.href = url; a.download = (activeSite?.id || 'synthetic')+'-gcps.csv'; a.click();
@@ -1027,8 +1037,8 @@ Number.isFinite(cornerMean) ? cornerMean.toFixed(3) : "No terrain",
   }
   el('exportFlight').addEventListener('click', () => {
     if (!optimizedPlan) return;
-    const rows = ['waypoint_id,capture_photo,easting_m,northing_m,camera_elevation_m,crs,vertical_datum'];
-    optimizedPlan.path.forEach((p,i) => { const c=p.position; rows.push([i+1,p.capture,(c[0]+(activeSite?.west || 0)).toFixed(3),(c[1]+(activeSite?.south || 0)).toFixed(3),c[2].toFixed(3),activeSite?.crs || 'local',activeSite?.verticalDatum || 'local'].join(',')); });
+    const rows = ['waypoint_id,capture_photo,easting_m,northing_m,camera_elevation_m,crs,vertical_datum,speed_mps,photo_interval_s'];
+    optimizedPlan.path.forEach((p,i) => { const c=p.position; rows.push([i+1,p.capture,(c[0]+(activeSite?.west || 0)).toFixed(3),(c[1]+(activeSite?.south || 0)).toFixed(3),c[2].toFixed(3),activeSite?.crs || 'local',activeSite?.verticalDatum || 'local',optimizedPlan.route.speed.toFixed(3),optimizedPlan.route.interval].join(',')); });
     exportCsv(rows,(activeSite?.id || 'synthetic')+'-flight.csv');
   });
   el('optimizeMission').addEventListener('click', async () => {
@@ -1039,7 +1049,10 @@ Number.isFinite(cornerMean) ? cornerMean.toFixed(3) : "No terrain",
     chips.forEach(c=>c.style.pointerEvents='none');
     controls.forEach(c=>c.disabled=true);
     try {
-      const limits = {priority:el('priority').value,pathMode:el('pathMode').value,turnRadius:Number(el('turnRadius').value),turnBuffer:Number(el('turnBuffer').value)};
+      const limits={priority:el('priority').value,pathMode:el('pathMode').value,turnRadius:numeric('turnRadius'),turnBuffer:numeric('turnBuffer'),
+        acquisition:el('cameraProfile').value!=='custom',compareOrientations:el('compareOrientations').checked,
+        maxGsd:numeric('maxGsd')/100,minSpeed:numeric('minSpeed'),maxSpeed:numeric('maxSpeed'),exposure:1/numeric('shutterDenominator'),blurPixels:numeric('blurPixels')};
+      if(!Number.isInteger(numeric('minViews'))||numeric('minViews')<3||numeric('minViews')>100||!Number.isFinite(numeric('minViewAngle'))||numeric('minViewAngle')<0||numeric('minViewAngle')>90)throw Error('Check visible-photo count and viewing spread limits.');
       ['minAltitude','maxAltitude','minClearance','minForward','maxForward','minSide','maxSide','maxGdop','maxPhotos'].forEach(k=>limits[k] = el(k).value.trim() === '' ? NaN : Number(el(k).value));
       const s = readState();
       if (activeSite) { s.width = activeSite.width; s.height = activeSite.height; }
@@ -1049,19 +1062,15 @@ Number.isFinite(cornerMean) ? cornerMean.toFixed(3) : "No terrain",
       const beforeDistance = optimizedPlan?.route.distance || flightDistance(lastData.cams);
       const beforeHeight = s.altitude;
       el('optimizationStatus').textContent = 'Searching flight and GCP combinations…';
-      const result = await FlightOptimizer.solve(s,limits,{ground,highest},(state,cams,maxGdop) => {
-        const values = [];
-        for (const p of candidates) {
-          const value = gdopAt(p,cams);
-          if (!Number.isFinite(value) || value > maxGdop) return null;
-          values.push(value);
-        }
-        const gcps = optimizeWithSpacing(candidates,values,state.numGcps,state.minSpacing);
-        if (gcps.points.length !== state.numGcps) return null;
-        return {worstGdop:Math.max(...values), clearance:ground+state.altitude-highest};
-      },(tested,total) => el('optimizationStatus').textContent = `Checking plan ${tested+1} of ${total}…`);
+      const result = await FlightOptimizer.solve(s,limits,{ground,highest,lowest:activeSite?Math.min(...activeSite.elevations.filter(v=>v!==null)):0},(state,cams,maxGdop,route) => {
+        const analysis=PlannerModel.analyze(candidates,cams,state,route.axis);
+        if(analysis.values.some((v,i)=>!Number.isFinite(v)||v>maxGdop||analysis.counts[i]<numeric('minViews')||analysis.angles[i]<numeric('minViewAngle')))return null;
+        const gcps=selectGcps(candidates,analysis,state);
+        if(gcps.points.length!==state.numGcps)return null;
+        return {gcps,worstGdop:Math.max(...analysis.values),clearance:ground+state.altitude-highest};
+      },(tested,total)=>el('optimizationStatus').textContent=`Checking plan ${tested+1} of ${total}…`);
       if (!result.plan) {
-        el('optimizationStatus').textContent = `No feasible plan in the sampled search (${result.tested} plans checked). Adjust altitude, overlap, GDOP, photo budget, GCP spacing, terrain clearance, curve radius or turn buffer. Current mission retained.`;
+        el('optimizationStatus').textContent = `No accepted plan in the sampled search (${result.tested} plans checked). Check GSD, capture-limited speed, blur, visibility, placement exclusions, GCP spacing, altitude or turn limits. The GCP heuristic may miss a feasible network. Current mission retained.`;
         return;
       }
       optimizedPlan = result.plan;
@@ -1070,7 +1079,8 @@ Number.isFinite(cornerMean) ? cornerMean.toFixed(3) : "No terrain",
       refreshLabels(); recompute();
       const r = result.plan.route;
       const curveInfo = r.style === 'curved' ? `Curved turns: ${r.turnRadius} m radius, extending ${r.turnRadius} m outside surveyed bounds; outside terrain is unverified. ` : 'Straight connectors. ';
-      el('optimizationStatus').textContent = `Applied: ${r.axis} flight, ${r.distance.toFixed(0)} m (previous ${beforeDistance.toFixed(0)} m), ${result.plan.state.altitude} m above reference (previous ${beforeHeight} m), ${r.photos} photos, ${r.rows} flight lines. ${curveInfo}Minimum sampled terrain clearance ${result.plan.clearance.toFixed(1)} m; worst GDOP ${result.plan.worstGdop.toFixed(3)}. ${s.numGcps} GCPs at ≥${s.minSpacing} m spacing. Best feasible plan in the 5 m / 5 percentage-point search plus range endpoints; ${result.tested}/${result.total} plans checked in priority order. Distance excludes takeoff, landing and travel to the site. This model uses all cameras for GDOP and does not check visibility or obstacles.`;
+      el('optimizationStatus').textContent=`Applied: ${r.axis}, ${r.distance.toFixed(0)} m (previous ${beforeDistance.toFixed(0)} m), ${result.plan.state.altitude} m above reference, ${r.photos} photos; ${r.speed.toFixed(2)} m/s, ${(r.time/60).toFixed(1)} min constant-speed estimate. ${r.gsd?`Worst GSD ${(r.gsd*100).toFixed(3)} cm/pixel; translation blur ${r.blurPixels?.toFixed(2)} px.`:'Custom camera: GSD and blur unverified.'} ${curveInfo}Sampled clearance ${result.plan.clearance.toFixed(1)} m. ${s.numGcps} GCPs at ≥${s.minSpacing} m spacing; maximum distance to control ${result.plan.gcps.maxDistance.toFixed(1)} m. ${result.plan.gcps.method}; ${result.plan.gcps.starts || 1} starts, ${result.plan.gcps.exchanges || 0} exchanges. ${result.tested}/${result.total} plans checked in rank order. No reconstruction RMSE, energy, occlusion, turn-time or obstacle certification. Orientations assume the selected physical camera roll can be flown.`;
+
     } catch (error) {
       el('optimizationStatus').textContent = error.message;
     } finally {
@@ -1079,8 +1089,19 @@ Number.isFinite(cornerMean) ? cornerMean.toFixed(3) : "No terrain",
       el('exportFlight').disabled = !optimizedPlan;
     }
   });
+
+  ['cameraProfile','cameraOrientation','gcpMethod','customSensorHeight','minViews','minViewAngle'].forEach(id=>el(id).addEventListener('change',onInput));
+  el('clearExclusions').addEventListener('click',()=>{exclusions=[];invalidatePlan();recompute();});
+  canvas.addEventListener('click',event=>{
+    if(!el('excludeMode').checked || el('optimizeMission').disabled || !mapTransform)return;
+    const radius=numeric('excludeRadius');if(!Number.isFinite(radius)||radius<1||radius>100)return;
+    const box=canvas.getBoundingClientRect(),{offX,offY,scale,H}=mapTransform;
+    const x=(event.clientX-box.left-offX)/scale,y=H-(event.clientY-box.top-offY)/scale;
+    if(x<0||y<0||x>lastData.W||y>lastData.H)return;
+    exclusions.push({x,y,radius});invalidatePlan();recompute();
+  });
   buildPresetChips();
-  const initial = loadState() || PRESETS["Small survey"];
+  const initial = loadState() || {...PRESETS["Small survey"],altitude:30,fOverlap:80,sOverlap:80};
   applyState(initial);
   refreshLabels();
   el('surveySelect').value = surveys[0]?.id || '';
