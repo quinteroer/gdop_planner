@@ -1,35 +1,52 @@
-# Survey flight and GCP planner
+# Flight & GCP Planner
 
-Open `index.html` in a modern browser and choose an attached survey. The app uses prepared orthomosaic previews and a 51 x 51 DTM sample for each site. Missing terrain is excluded. Original survey files remain read only.
+Open `index.html` in a modern browser. No server, build step, external fonts or package install is needed. Original survey data remains read-only.
 
-## Flight optimization
+## Main workflow
 
-The optimizer enumerates altitude at 5 m steps and front/side overlaps at 5 percentage-point steps, including range endpoints. It compares north-south and east-west survey lines, optionally both footprint orientations and straight/curved connectors. It rejects sampled terrain clearance, turn geometry, photo budget, GSD, capture timing and translation blur violations before ranking routes. Objectives are estimated time, distance, altitude, or normalized distance plus altitude. Ranked routes undergo visible-image geometry and GCP network checks; the first accepted route is applied. If none is accepted, the current mission is retained. This is a sampled heuristic search, not proof of global optimality or infeasibility.
+1. Choose an attached site or enter a custom rectangular area's dimensions.
+2. Choose the Mini 4 Pro photo mode, maximum pixel size, GCP count and minimum GCP spacing.
+3. Select **Find best plan**. The app searches flight routes and selects a distributed GCP network for each accepted candidate.
+4. Inspect the route and numbered GCPs, review time/photos/height, then download the flight and GCP CSVs. **View plan details** contains the coordinates and search diagnostics.
 
-Mini 4 Pro profiles use an ideal rectangular nadir footprint from 82.1-degree diagonal FOV and 4:3 aspect ratio, 8064 x 6048 or 4032 x 3024 pixels, and timed-photo intervals of 5 or 2 seconds respectively. The 24 mm equivalent focal length is not substituted for physical focal length. The default maximum GSD is 0.5 cm/pixel. Speed is capped by requested speed, actual photo spacing divided by capture interval, and permitted blur times GSD divided by exposure. Lower ground limits worst GSD; higher ground limits overlap and blur. These ideal estimates require verification with actual captures. Comparing footprint orientations assumes the selected physical camera orientation is available in flight.
+Changing a planning requirement clears the result and disables downloads until a new plan passes. Toggling coverage only changes the display. Preview imagery remains visible before optimization; unvalidated flight paths and GCPs are not presented as accepted plans.
 
-Estimated time is distance divided by constant speed. It excludes launch, landing, transit, acceleration, turn slowdown, wind, battery limits and image-write variability. Straight connectors contain abrupt changes of heading. Curved connectors comprise two quarter circles with a joining segment outside the site. They require line separation of at least twice the radius and sufficient outside buffer; radius is not a validated aircraft performance constraint. Outside-site terrain and obstacles are unverified. Photos occur on straight survey lines only.
+**Advanced settings** contains height limits, terrain clearance, maximum speed, optimization priority, minimum overlaps, shutter speed, photo budget, optional terrain line of sight and map refinements. Defaults are 80% forward/side overlap, four usable images and at least 10 degrees viewing spread per sampled terrain patch, a 0.5-pixel translation-blur budget and a minimum flight speed of 0.3 m/s. The overlap search spans the chosen minimum through five percentage points higher, capped at 90% forward and 85% side.
 
-## GCP network optimization
+Draw an imaging polygon by choosing **Draw survey boundary**, clicking its corners and selecting **Use boundary**. Simple concave polygons are supported. Straight transit can cross outside that imaging boundary; it is not a flight fence. **Exclude GCP placement** lets you click unsuitable target areas with a configurable radius. Exclusions affect GCP placement, not aircraft travel or required photo coverage. Boundary and exclusion changes require re-optimization.
 
-The default selector replaces individual-score greedy selection with deterministic multistart exchange. Eligible locations must satisfy spacing, visible photo count, minimum maximum-pair intersection angle and manual exclusion circles. Click the map with exclusion mode enabled to mask water, inaccessible ground or other unsuitable control locations. These masks apply to GCP placement, not image coverage or flight safety.
+The photo-quality panel, capture-log import, reconstruction-feedback import, supplemental-view controls, legacy GCP comparison, manual flight sliders and diagnostic layer menus have been removed from the interface. Capture research helpers remain available in the standalone JavaScript module; `CAPTURE_PLANNING.md` records that earlier workflow and is not the current UI guide.
 
-The search builds six spatial starting layouts and retains a valid legacy greedy seed when available. It requires all occupied quadrants when control count permits, plus a central control when an eligible central location and sufficient count exist. It minimizes a dimensionless planning objective:
+## Flight algorithm
 
-`maximum nearest-control distance / diagonal + 0.5 * mean nearest-control distance / diagonal + 0.05 * mean bounded geometry diagnostic + 0.1 * elevation-range deficit`
+The discrete search enumerates altitude in 5 m steps and overlap in 5 percentage-point steps, including range endpoints. It automatically compares twelve headings at 15-degree increments, plus the original cardinal-axis grid layouts, so expanding the search preserves the original feasible candidates. All missions use straight survey strips at a constant elevation. Camera orientation is fixed to the short image dimension along flight; the UI no longer asks users to compare unverified camera-roll configurations.
 
-Each seed receives up to six best-improvement one-point exchange passes, followed by a bounded two-point exchange pass to escape some local traps. Exchanges use a spatial/geometry candidate pool and at most 144 demand samples. Final layouts and original seeds are compared using all terrain demand points. A valid original greedy seed therefore cannot be worsened under this full objective. Hard spacing and distribution constraints remain enforced. The restricted pool and bounded exchanges can miss feasible or better layouts. Legacy greedy selection is available for comparison. Network coverage distance is a proxy for control distribution, not predicted survey error.
+Routes are ranked by estimated flight time by default, with distance and altitude available as advanced priorities. Initial filters enforce sampled terrain clearance, photo budget, worst GSD, minimum speed, image-save interval and translation blur. Timing includes all consecutive capture positions, including row transitions. Ranked candidates undergo visible-image geometry checks and GCP network selection. The first accepted candidate is the best accepted route under that ranking in the sampled set; this is not proof of global optimality or infeasibility.
 
-## Geometry and accuracy
+The Mini 4 Pro footprint is an ideal nadir rectangle based on 82.1-degree diagonal FOV, 4:3 aspect ratio and 8064 x 6048 or 4032 x 3024 image dimensions. Timed-capture intervals are 5 seconds at 48 MP and 2 seconds at 12 MP. The 24 mm equivalent focal length is not substituted for physical focal length. Speed is capped by requested speed, minimum consecutive capture spacing divided by camera interval, and blur budget times GSD divided by exposure. These ideal estimates require validation with the actual camera workflow.
 
-Only simulated cameras whose rectangular nadir footprints contain a terrain point contribute to that point's direction-matrix diagnostic. The app also checks visible image count and largest pairwise viewing angle. It does not model line-of-sight occlusion, image matching, lens calibration uncertainty, rolling shutter, correlated observations, GCP survey error or bundle-adjustment covariance. Its dimensionless diagnostic is neither measured GNSS GDOP nor reconstruction RMSE.
+Time is distance divided by constant speed. It excludes launch, landing, acceleration, turning slowdown, transit to/from the survey, wind and battery stops. The app does not split flights into battery missions or model aircraft dynamics, obstacles, trees, rolling shutter or image-write variability. A DTM is not a model of buildings, dam faces or overhangs. Optional ray sampling rejects terrain occlusion and unknown terrain; it does not certify visibility or clearance between samples.
 
-A GSD threshold does not establish the requested <=1 cm horizontal and vertical RMSE. That requires independently surveyed checkpoints withheld from adjustment, suitable survey uncertainty, and reconstruction validation. No optimizer here certifies that requirement. Flight covers rectangular survey bounds at constant elevation above median sampled terrain; height varies above terrain. Sampled clearance does not cover trees or buildings.
+## GCP algorithm
 
-## Exports and validation
+Eligible locations must satisfy minimum image count, viewing spread and manual placement exclusions. The deterministic multi-start network search seeds six spatial layouts and retains a valid greedy seed when available. It requires occupied quadrants and an eligible central location when count permits, then improves the set through bounded one- and two-point exchanges.
 
-GCP CSV uses metres in EPSG:32618 and preserves source EGM96 height datum. Locations are sampled suggestions, not surveyed coordinates. Flight CSV contains simulated photo/transit positions, capture flags, speed and interval; it is not an autopilot mission. Manual flight/camera/GCP changes invalidate the optimized route; display toggles preserve it.
+The dimensionless objective combines maximum and mean distance to the nearest GCP, bounded geometry quality and elevation-range representation. Search uses a restricted candidate pool and at most 144 demand samples, then compares final layouts and original seeds against all demand points. This avoids worsening a valid original seed under the full objective, but bounded exchanges can miss better or feasible layouts.
 
-Run `node optimizer.test.cjs` and `node network.test.cjs` for algorithm checks. `node verify.cjs` runs three-site optimization, exports, curved route and retained-mission browser checks with this workspace's bundled Playwright configuration.
+Network coverage is distance to control, not reconstruction error. Direction-matrix geometry is neither GNSS GDOP nor predicted RMSE. The app does not compute bundle-adjustment covariance, calibration uncertainty, correlated observations, verified image matches or GCP measurement uncertainty. Maximum pixel size does not certify 1 cm horizontal or vertical RMSE; independent surveyed checkpoints are required.
 
-To regenerate prepared data, run `prepare_sites.py` with Python, Pillow and numpy. It reads the sibling `Site Scan Data and Model Photos` directory. Adapted from https://github.com/quinteroer/gdop_planner.
+## Files and exports
+
+- `index.html`, `planner.css`, `planner-ui.js`: focused interface and interactions.
+- `optimizer.js`: route generation and constrained search.
+- `app-model.js`, `capture-planning.js`: footprint visibility, sampled terrain rays and geometry diagnostics.
+- `gcp-network.js`: distributed GCP network refinement.
+- `sites.js`, `assets/`: prepared terrain and orthomosaic previews.
+
+GCP exports use EPSG:32618 and EGM96 heights for attached sites. Coordinates are sampled planning suggestions, not surveyed control. Custom sites use local metres. Flight exports include capture positions, estimated elapsed time, footprint heading, nadir tilt, speed and the minimum supported capture interval; they are not executable autopilot missions. `photo_interval_s` is the camera's minimum timed interval, not a promise that every capture occurs exactly that far apart.
+
+## Verification
+
+Run `node optimizer.test.cjs`, `node network.test.cjs` and `node capture-planning.test.cjs` for algorithm checks. `node verify.cjs` verifies the focused UI across all three sites, timing/spacing exports, invalidation and mobile layout. `node verify-capture.cjs` checks advanced boundary drawing, exclusions, terrain visibility and failure states. Browser tests currently reference this workspace's bundled Playwright and Chromium paths. Software tests do not establish flight safety or field accuracy.
+
+Adapted from https://github.com/quinteroer/gdop_planner.
