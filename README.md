@@ -17,6 +17,12 @@ Open http://localhost:8000. Static hosting such as GitHub Pages also works. Open
 3. Select **Find best plan**. The status shows route checks and altitude. **Cancel search** stops the worker.
 4. Inspect the curved route, numbered GCPs, and optional midpoint markers. Download flight and GCP CSVs.
 
+The map opens in **3D terrain** view using the same elevation grid as the optimizer. The existing orthomosaic is draped over the elevation surface. Drag to orbit, scroll to zoom, and Shift-drag or right-drag to pan. Touch supports a two-finger pinch and pan. Arrow keys rotate, plus/minus zoom, and zero resets the camera. **Reset view** restores the initial viewpoint.
+
+**Vertical scale** defaults to 1× true scale. The optional 2× and 5× settings exaggerate heights for inspection and affect only the display. Flight and GCP elevations remain in metres. The three supplied sites use 51 × 51 sampled DTM grids, with missing samples left as gaps. The ground elevation range and datum appear above the map. Custom dimension-only areas use flat ground at 0 m.
+
+Use **2D map** for boundary and exclusion editing. Choosing a drawing tool automatically switches to the top-down view. Returning to 3D retains accepted boundaries, exclusions, and optimization results. Ground targets, midpoint candidates, and the airborne flight route share the same local coordinate system. Labels and route lines overlay the terrain for visibility. The renderer uses native Canvas with perspective projection and depth-sorted terrain triangles.
+
 Advanced settings control height range, clearance, minimum photo overlaps, shutter speed, speed, photo budget, corner rounding, and route checks per height. Increasing the search budget allows more refinement. The default objective is shortest distance. Fewest GCPs, flight time, and lowest height are also available. Changing requirements invalidates downloads until a new plan passes.
 
 An imaging polygon limits the surveyed samples and GCP candidates. It is not a flight fence. GCP exclusion circles affect target placement. Terrain line-of-sight checks reject hidden views, unknown terrain, and insufficient clearance along the sampled route. Unknown terrain can therefore make an otherwise plausible plan fail.
@@ -65,6 +71,7 @@ Distance to control and GDOP are planning metrics. Validate mapping accuracy wit
 - `planner_request.py` converts visualizer settings to the function call.
 - `python-worker.js` loads Pyodide and executes that same Python code.
 - `python-planner.js` manages worker progress/cancellation and adapts results for drawing and CSV exports.
+- `terrain-view.js` renders textured 3D terrain and handles orbit, pan, zoom, and touch controls.
 - `planner-ui.js`, `index.html`, and `planner.css` implement the visualizer.
 - `sites.js` and `assets/` provide prepared terrain and map previews.
 - The original JavaScript algorithm modules remain available for existing library callers and comparison tests. The visualizer uses the Python implementation.
@@ -78,6 +85,6 @@ node network.test.cjs
 node capture-planning.test.cjs
 ```
 
-With Playwright and Chromium installed, `node verify-python.cjs` starts a temporary static server and checks the actual browser Python worker, count search, rounded route, capture exports, failure, cancellation/retry, and mobile layout. Set PLAYWRIGHT_MODULE and CHROMIUM_PATH when using bundled browser tools. The browser test needs internet access for Pyodide. The older `verify.cjs` and `verify-capture.cjs` now expect the static server at port 8000, or GDOP_TEST_URL. Their existing bundled Playwright paths remain supported.
+With Playwright and Chromium installed, `node verify-python.cjs` starts a temporary static server and checks the actual browser Python worker, count search, rounded route, capture exports, failure, cancellation/retry, and mobile layout. Set PLAYWRIGHT_MODULE and CHROMIUM_PATH when using bundled browser tools. The browser test needs internet access for Pyodide. `node verify-3d.cjs` checks real elevation ranges, mouse and touch controls, keyboard/reset, automatic 2D editing, the actual Python route overlay, and mobile layout. It uses the same browser environment variables. The older `verify.cjs` and `verify-capture.cjs` now expect the static server at port 8000, or GDOP_TEST_URL. Their existing bundled Playwright paths remain supported.
 
 Adapted from https://github.com/quinteroer/gdop_planner.

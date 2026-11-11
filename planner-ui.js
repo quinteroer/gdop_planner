@@ -3,6 +3,11 @@
   'use strict';
   const $=id=>document.getElementById(id),sites=window.SURVEY_SITES||[];
   const form=$('plannerForm'),canvas=$('mapCanvas'),ctx=canvas.getContext('2d');
+  let viewMode='3d',orbitFrame=0;
+  const terrainView=new TerrainView(canvas,()=>{
+    if(!orbitFrame)orbitFrame=requestAnimationFrame(()=>{orbitFrame=0;draw();});
+  });
+  terrainView.setEnabled(true);
   const defaults={minViews:4,minAngle:10,maxGeometry:10,blurPixels:.5,minSpeed:.3};
   let site=null,image=null,plan=null,boundary=null,exclusions=[],draft=[],transform=null,running=false,searchReport=null;
   const number=id=>$(id).value.trim()===''?NaN:Number($(id).value);
@@ -51,6 +56,10 @@
   }
   function updateSiteInfo(){
     const {width,height}=dimensions();
+    const elevations=site?site.elevations.filter(Number.isFinite):[0];
+    $('terrainInfo').textContent=site
+      ?`DTM ground elevations ${Math.min(...elevations).toFixed(1)} to ${Math.max(...elevations).toFixed(1)} m · ${site.verticalDatum} · ${site.gridSize} × ${site.gridSize} sampled grid. Gaps indicate missing terrain.`
+      :'Custom area uses flat ground at 0 m.';
     $('surveyInfo').textContent=Number.isFinite(width)&&Number.isFinite(height)?`${width.toFixed(0)} × ${height.toFixed(0)} m${site?' · terrain loaded':''}`:'Enter the site dimensions.';
   }
   async function optimize(event){
@@ -107,7 +116,33 @@
     $('coordinateInfo').textContent=site?`${site.crs} · ${site.verticalDatum} heights. Suggested locations; survey these coordinates in the field.`:'Local coordinates in metres from the southwest corner. Suggested locations, not surveyed control.';
     $('gcpRows').replaceChildren(...g.points.map((p,i)=>{const tr=document.createElement('tr');[i+1,p[0]+(site?.west||0),p[1]+(site?.south||0),p[2]].forEach((v,j)=>{const td=document.createElement('td');td.textContent=j===0?String(v):v.toFixed(3);tr.append(td);});return tr;}));
   }
+  function setViewMode(mode){
+    if(mode==='3d'&&$('mapTool').value!=='view'){
+      draft=[];$('mapTool').value='view';updateMapTool();renderResults();
+    }
+    viewMode=mode;terrainView.setEnabled(mode==='3d');
+    $('view3d').setAttribute('aria-pressed',String(mode==='3d'));
+    $('view2d').setAttribute('aria-pressed',String(mode==='2d'));
+    $('resetView').disabled=mode==='2d';$('verticalScale').disabled=mode==='2d';
+    canvas.parentElement.querySelector('.north-marker').hidden=mode==='3d';
+    $('viewInstructions').textContent=mode==='3d'
+      ?'Drag to orbit · Scroll or pinch to zoom · Shift-drag or two fingers to pan'
+      :'Top-down map · Draw boundaries and GCP exclusions using Advanced settings';
+    canvas.setAttribute('aria-label',mode==='3d'
+      ?'3D terrain, flight path and GCPs. Drag or use arrow keys to orbit. Scroll or use plus and minus to zoom. Zero resets.'
+      :'Top-down survey boundary, flight path and numbered GCP locations');
+    draw();
+  }
   function draw(){
+    if(viewMode==='3d'){
+      transform=null;
+      const {width,height}=dimensions();
+      if(Number.isFinite(width)&&Number.isFinite(height)&&width>0&&height>0)
+        terrainView.render({site,width,height,image,plan,boundary,exclusions,terrainAt,
+          showCoverage:$('showCoverage').checked,showMidpoints:$('showMidpoints').checked});
+      else{ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);}
+      return;
+    }
     const box=canvas.getBoundingClientRect(),w=box.width,h=box.height,dpr=window.devicePixelRatio||1;
     if(!w||!h)return;
     canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
@@ -148,7 +183,7 @@
     ctx.strokeStyle='#d3e1ed';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(20,h-20);ctx.lineTo(20+length*scale,h-20);ctx.stroke();ctx.font='10px Segoe UI, sans-serif';ctx.fillStyle='#d3e1ed';ctx.textAlign='left';ctx.fillText(length+' m',20,h-30);
   }
   function updateMapTool(){
-    const mode=$('mapTool').value;$('boundaryActions').hidden=mode!=='boundary';$('excludeOptions').hidden=mode!=='exclude';
+    const mode=$('mapTool').value;if(mode!=='view'&&viewMode!=='2d')setViewMode('2d');$('boundaryActions').hidden=mode!=='boundary';$('excludeOptions').hidden=mode!=='exclude';
     canvas.classList.toggle('editing',mode!=='view');canvas.parentElement.classList.toggle('editing',mode!=='view');
     $('mapToolHint').textContent=mode==='boundary'?'Click at least three corners on the map, then Use boundary. Transit can cross outside this imaging boundary.':mode==='exclude'?'Click the map to keep GCPs away from water, unstable ground or inaccessible areas. Exclusions do not change the flight path.':'Refine the survey area or avoid unsuitable GCP locations.';
   }
@@ -162,6 +197,11 @@
     plan.path.forEach((p,i)=>{const c=p.position;if(i){const prev=plan.path[i-1].position;elapsed+=Math.hypot(c[0]-prev[0],c[1]-prev[1])/plan.route.speed;}
       rows.push([i+1,p.capture,(c[0]+(site?.west||0)).toFixed(3),(c[1]+(site?.south||0)).toFixed(3),c[2].toFixed(3),site?.crs||'local',site?.verticalDatum||'local',elapsed.toFixed(3),heading(plan.route.axis),0,plan.route.speed.toFixed(3),plan.route.interval].join(','));});exportCsv(rows,'flight');
   });
+  $('view3d').addEventListener('click',()=>setViewMode('3d'));
+  $('view2d').addEventListener('click',()=>setViewMode('2d'));
+  $('resetView').addEventListener('click',()=>{terrainView.reset();draw();});
+  $('verticalScale').addEventListener('change',()=>{terrainView.exaggeration=number('verticalScale');draw();});
+  canvas.addEventListener('dblclick',()=>{if(viewMode==='3d'){terrainView.reset();draw();}});
   $('cancelSearch').addEventListener('click',()=>PythonPlanner.cancel());
   $('showMidpoints').addEventListener('change',draw);
   function updateCountMode(){
@@ -202,5 +242,5 @@
   $('clearExclusions').addEventListener('click',()=>{exclusions=[];$('mapToolStatus').textContent='GCP exclusions cleared.';invalidate('GCP exclusions cleared. Find a new plan.');});
   const resize=new ResizeObserver(draw);resize.observe(canvas.parentElement);
   sites.forEach(s=>{const option=document.createElement('option');option.value=s.id;option.textContent=s.name;$('surveySelect').append(option);});
-  $('surveySelect').value=sites[0]?.id||'';selectSite();
+  $('surveySelect').value=sites[0]?.id||'';selectSite();setViewMode('3d');
 })();
