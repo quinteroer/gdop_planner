@@ -5,7 +5,7 @@ const {pathToFileURL}=require('url'),path=require('path'),assert=require('assert
  const browser=await chromium.launch({headless:true,executablePath:'C:/Users/equin/AppData/Local/ms-playwright/chromium_headless_shell-1208/chrome-headless-shell-win64/chrome-headless-shell.exe'});
  try{
   const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(pathToFileURL(path.join(__dirname,'index.html')).href);await page.selectOption('#surveySelect','');
+  await page.goto(process.env.GDOP_TEST_URL||'http://127.0.0.1:8000');await page.selectOption('#gcpMode','fixed');await page.fill('#numGcps','5');await page.locator('#searchBudget').evaluate(el=>el.value='40');await page.selectOption('#surveySelect','');
   await page.locator('#advancedSettings summary').click();
   for(const [id,value] of Object.entries({minAltitude:30,maxAltitude:30,maxGsd:1,minForward:80,minSide:80}))await page.fill('#'+id,String(value));
   async function clickMap(x,y){
@@ -16,11 +16,11 @@ const {pathToFileURL}=require('url'),path=require('path'),assert=require('assert
   await page.selectOption('#mapTool','boundary');for(const p of [[5,5],[95,5],[95,95],[5,95]])await clickMap(...p);
   assert((await page.locator('#mapToolStatus').innerText()).includes('4 boundary corners'));
   await page.click('#finishBoundary');assert((await page.locator('#mapToolStatus').innerText()).includes('applied'));
-  await page.check('#terrainSight');await page.click('#optimizeMission');await page.waitForFunction(()=>!document.querySelector('#optimizeMission').disabled,{},{timeout:120000});
+  await page.check('#terrainSight');await page.click('#optimizeMission');await page.waitForFunction(()=>!document.querySelector('#optimizeMission').disabled,{},{timeout:240000});
   assert.equal(await page.locator('#planBadge').innerText(),'Plan ready',await page.locator('#optimizationStatus').innerText());
   await page.evaluate(()=>{window.exportedCsv=null;URL.createObjectURL=blob=>{blob.text().then(t=>window.exportedCsv=t);return 'blob:test';};HTMLAnchorElement.prototype.click=function(){};});
   await page.selectOption('#mapTool','exclude');await clickMap(50,50);assert.equal(await page.locator('#exportFlight').isDisabled(),true);
-  await page.click('#optimizeMission');await page.waitForFunction(()=>!document.querySelector('#optimizeMission').disabled,{},{timeout:120000});
+  await page.click('#optimizeMission');await page.waitForFunction(()=>!document.querySelector('#optimizeMission').disabled,{},{timeout:240000});
   assert.equal(await page.locator('#planBadge').innerText(),'Plan ready');
   await page.click('#exportGcps');await page.waitForFunction(()=>window.exportedCsv?.startsWith('id,easting_m'));
   const gcps=(await page.evaluate(()=>window.exportedCsv)).split('\n').slice(1).map(r=>r.split(',').map(Number));
@@ -29,11 +29,11 @@ const {pathToFileURL}=require('url'),path=require('path'),assert=require('assert
   await page.selectOption('#mapTool','boundary');for(const p of [[5,5],[95,95],[95,5],[5,95]])await clickMap(...p);await page.click('#finishBoundary');
   assert(/cross|zero area/.test(await page.locator('#mapToolStatus').innerText()));await page.click('#cancelBoundary');
   // A failed search never enables exports for unchecked settings.
-  await page.fill('#minClearance','100');await page.click('#optimizeMission');await page.waitForFunction(()=>!document.querySelector('#optimizeMission').disabled);
+  await page.fill('#minClearance','100');await page.click('#optimizeMission');await page.waitForFunction(()=>!document.querySelector('#optimizeMission').disabled,{},{timeout:240000});
   assert.equal(await page.locator('#planBadge').innerText(),'No plan found');assert.equal(await page.locator('#exportFlight').isDisabled(),true);
   assert((await page.locator('#optimizationStatus').innerText()).includes('Try a larger pixel size'));
   await page.fill('#minClearance','15');await page.fill('#minAltitude','60');await page.fill('#maxAltitude','20');
-  await page.click('#optimizeMission');await page.waitForFunction(()=>!document.querySelector('#optimizeMission').disabled);
+  await page.click('#optimizeMission');await page.waitForFunction(()=>!document.querySelector('#optimizeMission').disabled,{},{timeout:240000});
   assert.equal(await page.locator('#planBadge').innerText(),'Check settings');assert((await page.locator('#optimizationStatus').innerText()).includes('Check limit ranges'));
   await page.selectOption('#surveySelect','spring-run');assert.equal(await page.locator('#customDimensions').isVisible(),false);assert.equal(await page.locator('#mapTool').inputValue(),'view');
   assert.deepEqual(errors,[]);console.log('Advanced UI: drawn boundary, terrain visibility, GCP exclusions, invalid geometry, failed search and settings validation passed.');

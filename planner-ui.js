@@ -8,7 +8,6 @@
   const number=id=>$(id).value.trim()===''?NaN:Number($(id).value);
   const dimensions=()=>({width:site?.width??number('siteWidth'),height:site?.height??number('siteHeight')});
   const ground=()=>site?.groundReference??0;
-  const elevationRange=()=>{const z=site?site.elevations.filter(v=>v!==null):[0];return {ground:ground(),highest:Math.max(...z),lowest:Math.min(...z)};};
   const heading=axis=>typeof axis==='number'?axis:axis==='east-west'?90:0;
   function terrainAt(x,y){
     const {width,height}=dimensions();
@@ -35,9 +34,7 @@
       maxGdop:defaults.maxGeometry,maxPhotos:number('maxPhotos'),priority:$('priority').value,pathMode:'straight',
       searchHeadings:true,compareOrientations:false,acquisition:true,maxGsd:number('maxGsd')/100,
       maxSpeed:number('maxSpeed'),minSpeed:defaults.minSpeed,exposure:1/number('shutterDenominator'),blurPixels:defaults.blurPixels};
-    const visibility={minViews:defaults.minViews,minAngle:defaults.minAngle,maxGsd:limits.maxGsd,
-      terrain:$('terrainSight').checked?terrainAt:null,step:site?Math.min(site.width,site.height)/(site.gridSize-1)/2:2};
-    return {state,limits,visibility};
+    return {state,limits};
   }
   function setStatus(text,error=false){$('optimizationStatus').textContent=text;$('optimizationStatus').classList.toggle('error',error);}
   function badge(text,kind=''){$('planBadge').textContent=text;$('planBadge').className='plan-badge '+kind;}
@@ -56,39 +53,39 @@
     const {width,height}=dimensions();
     $('surveyInfo').textContent=Number.isFinite(width)&&Number.isFinite(height)?`${width.toFixed(0)} × ${height.toFixed(0)} m${site?' · terrain loaded':''}`:'Enter the site dimensions.';
   }
-  function eligible(p,i,analysis){return analysis.counts[i]>=defaults.minViews&&analysis.angles[i]>=defaults.minAngle&&
-    !exclusions.some(e=>Math.hypot(p[0]-e.x,p[1]-e.y)<e.radius);}
   async function optimize(event){
     event.preventDefault();if(running)return;
     if(!form.checkValidity()){form.reportValidity();return;}
     if(draft.length){setStatus('Finish or cancel your boundary drawing before optimizing.',true);return;}
     const controls=[...form.querySelectorAll('input,select,button')],disabled=controls.map(c=>c.disabled);
     running=true;controls.forEach(c=>c.disabled=true);$('exportFlight').disabled=true;$('exportGcps').disabled=true;
-    $('optimizeMission').firstElementChild.textContent='Finding your plan…';badge('Searching','busy');setStatus('Comparing flight routes and checking coverage…');
+    $('optimizeMission').firstElementChild.textContent='Finding your plan…';badge('Searching','busy');setStatus('Starting Python geometric route search…');$('cancelSearch').hidden=false;$('cancelSearch').disabled=false;
     const progress=$('searchProgress');progress.hidden=false;progress.removeAttribute('value');
     await new Promise(r=>setTimeout(r,30));
     try{
-      const {state,limits,visibility}=readSettings(),points=surfacePoints();
+      const {state,limits}=readSettings(),points=surfacePoints();
       if(!points.length)throw Error('No usable terrain falls inside this boundary. Reset the boundary or choose a larger area.');
-      const result=await FlightOptimizer.solve(state,limits,elevationRange(),(candidate,cams,maxGeometry,route)=>{
-        const analysis=PlannerModel.analyze(points,cams,candidate,route.axis,visibility);
-        if(analysis.values.some((v,i)=>!Number.isFinite(v)||v>maxGeometry||analysis.counts[i]<defaults.minViews||analysis.angles[i]<defaults.minAngle))return null;
-        const allowed=(p,i)=>eligible(p,i,analysis);
-        const gcps=GcpNetwork.optimize(points,analysis.values,candidate.numGcps,candidate.minSpacing,{allowed,demands:points});
-        if(gcps.points.length!==candidate.numGcps)return null;
-        return {gcps,analysis,points,clearance:ground()+candidate.altitude-elevationRange().highest};
-      },(tested,total)=>{progress.max=total;progress.value=tested;setStatus(`Checking route ${tested+1} of ${total}…`);});
+      const request={state,limits,points,ground:ground(),exclusions,
+        gcpMode:$('gcpMode').value,minGcps:number('minGcps'),
+        maxGcpDistance:$('gcpMode').value==='optimize'&&$('maxGcpDistance').value.trim()?number('maxGcpDistance'):null,
+        turnRadius:number('turnRadius'),searchBudget:number('searchBudget'),
+        checkTerrain:$('terrainSight').checked,
+        terrainGrid:site?{gridSize:site.gridSize,elevations:site.elevations}:null};
+      const result=await PythonPlanner.solve(request,message=>{
+        if(message.type==='status')setStatus(message.message);
+        else setStatus(`Checking geometric route ${message.evaluated_routes} at ${message.altitude_m} m…`);
+      });
       if(!result.plan){
         badge(plan?'Previous plan retained':'No plan found');
-        setStatus(`No plan met all requirements in this search.${plan?' Your previous plan is retained.':''} Try a larger pixel size, a wider height range, or smaller GCP spacing.${visibility.terrain?' Terrain visibility also rejects paths through missing terrain data.':''}`,true);
+        setStatus(`No plan met all requirements in this search.${plan?' Your previous plan is retained.':''} Try a larger pixel size, a wider height range, or smaller GCP spacing.${$('terrainSight').checked?' Terrain visibility also rejects paths through missing terrain data.':''}`,true);
       }else{
-        plan=result.plan;searchReport={tested:result.tested,total:result.total};badge('Plan ready','ready');
+        plan=PythonPlanner.adapt(result,state);searchReport=result.diagnostics;badge('Plan ready','ready');
         setStatus(`Plan found. Coverage checked; ${plan.gcps.points.length} GCPs placed.`);
       }
       renderResults();draw();
     }catch(error){setStatus(error.message,true);badge(plan?'Previous plan retained':'Check settings');}
     finally{
-      running=false;controls.forEach((c,i)=>c.disabled=disabled[i]);progress.hidden=true;
+      running=false;controls.forEach((c,i)=>c.disabled=disabled[i]);progress.hidden=true;$('cancelSearch').hidden=true;
       $('optimizeMission').firstElementChild.textContent='Find best plan';$('exportFlight').disabled=!plan;$('exportGcps').disabled=!plan;
     }
   }
@@ -97,15 +94,15 @@
     $('mapEmpty').hidden=!!plan||draft.length>0;
     if(!plan){
       ['resultTime','resultPhotos','resultHeight','resultGcps'].forEach(id=>$(id).textContent='—');
-      $('resultPhotoDetail').textContent='Planned capture positions';$('resultGcpDetail').textContent='Distributed across the site';
+      $('resultPhotoDetail').textContent='Planned capture positions';$('resultGcpDetail').textContent='Selected by GDOP';
       $('planSummary').textContent='Set your requirements and select Find best plan to compare routes.';$('gcpRows').replaceChildren();$('planMetrics').replaceChildren();return;
     }
     const r=plan.route,s=plan.state,g=plan.gcps;
     $('resultTime').innerHTML=`${(r.time/60).toFixed(1)} <em>min</em>`;$('resultPhotos').textContent=r.photos.toLocaleString();
     $('resultHeight').innerHTML=`${s.altitude.toFixed(0)} <em>m</em>`;$('resultGcps').textContent=g.points.length;
     $('resultPhotoDetail').textContent=`${(r.gsd*100).toFixed(2)} cm/pixel`;$('resultGcpDetail').textContent=`At least ${s.minSpacing} m apart`;
-    $('planSummary').textContent=`${r.distance.toFixed(0)} m route · ${heading(r.axis)}° heading · ${s.fOverlap}% forward / ${s.sOverlap}% side overlap · ${r.speed.toFixed(2)} m/s. All ${plan.points.length} sampled patches meet coverage limits.`;
-    const metrics=[['Minimum terrain clearance',plan.clearance.toFixed(1)+' m'],['Maximum distance to a GCP',g.maxDistance.toFixed(1)+' m'],['Minimum usable views',Math.min(...plan.analysis.counts)],['Minimum viewing spread',Math.min(...plan.analysis.angles).toFixed(1)+'°'],['Routes passing initial limits',searchReport.total],['Routes checked in rank order',searchReport.tested],['GCP starting layouts',g.starts],['GCP improvements',g.exchanges]];
+    $('planSummary').textContent=`${r.distance.toFixed(0)} m geometric route · ${r.rounded?'rounded turns':'angular turns'} · ${r.speed.toFixed(2)} m/s · fixed camera heading ${heading(r.axis)}°. All ${plan.points.length} sampled patches meet coverage limits.`;
+    const metrics=[['Minimum terrain clearance',plan.clearance.toFixed(1)+' m'],['Maximum distance to a GCP',g.maxDistance.toFixed(1)+' m'],['Mean GCP GDOP',g.meanGdop.toFixed(3)],['Minimum usable views',Math.min(...plan.analysis.counts)],['Minimum viewing spread',Math.min(...plan.analysis.angles).toFixed(1)+'°'],['Geometric routes checked',searchReport.evaluated_routes],['Midpoint tours attempted',searchReport.midpoint_routes_attempted],['Initial grid distance',searchReport.shortest_grid_seed_m?.toFixed(0)+' m'],['Search limit',searchReport.evaluation_budget_per_altitude+' checks per height']];
     $('planMetrics').replaceChildren(...metrics.map(([key,value])=>{const d=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;d.append(dt,dd);return d;}));
     $('coordinateInfo').textContent=site?`${site.crs} · ${site.verticalDatum} heights. Suggested locations; survey these coordinates in the field.`:'Local coordinates in metres from the southwest corner. Suggested locations, not surveyed control.';
     $('gcpRows').replaceChildren(...g.points.map((p,i)=>{const tr=document.createElement('tr');[i+1,p[0]+(site?.west||0),p[1]+(site?.south||0),p[2]].forEach((v,j)=>{const td=document.createElement('td');td.textContent=j===0?String(v):v.toFixed(3);tr.append(td);});return tr;}));
@@ -136,6 +133,10 @@
       const start=px(plan.cams[0]);ctx.fillStyle='#b9dbff';ctx.beginPath();ctx.arc(...start,4,0,2*Math.PI);ctx.fill();
     }
     exclusions.forEach(e=>{const [a,b]=px([e.x,e.y]);ctx.beginPath();ctx.arc(a,b,e.radius*scale,0,Math.PI*2);ctx.fillStyle='#e77c6b30';ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle='#f59888';ctx.setLineDash([4,3]);ctx.stroke();ctx.setLineDash([]);});
+    if(plan&&$('showMidpoints').checked)plan.midpoints.forEach(p=>{
+      const [a,b]=px(p);ctx.strokeStyle='#81f7e4';ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.arc(a,b,4,0,Math.PI*2);ctx.stroke();
+    });
     if(plan)plan.gcps.points.forEach((p,i)=>{
       const [a,b]=px(p);ctx.shadowColor='#07182570';ctx.shadowBlur=6;ctx.fillStyle='#f4c768';ctx.strokeStyle='#fff0bb';ctx.lineWidth=1.5;
       ctx.beginPath();ctx.arc(a,b,11,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.shadowBlur=0;
@@ -161,6 +162,14 @@
     plan.path.forEach((p,i)=>{const c=p.position;if(i){const prev=plan.path[i-1].position;elapsed+=Math.hypot(c[0]-prev[0],c[1]-prev[1])/plan.route.speed;}
       rows.push([i+1,p.capture,(c[0]+(site?.west||0)).toFixed(3),(c[1]+(site?.south||0)).toFixed(3),c[2].toFixed(3),site?.crs||'local',site?.verticalDatum||'local',elapsed.toFixed(3),heading(plan.route.axis),0,plan.route.speed.toFixed(3),plan.route.interval].join(','));});exportCsv(rows,'flight');
   });
+  $('cancelSearch').addEventListener('click',()=>PythonPlanner.cancel());
+  $('showMidpoints').addEventListener('change',draw);
+  function updateCountMode(){
+    const fixed=$('gcpMode').value==='fixed';
+    $('countRange').hidden=fixed;$('minGcps').disabled=fixed;
+    $('gcpCountLabel').textContent=fixed?'GCP count':'Maximum GCPs';
+  }
+  $('gcpMode').addEventListener('change',updateCountMode);updateCountMode();
   form.addEventListener('submit',optimize);
   form.addEventListener('invalid',event=>{if(event.target.closest('.advanced'))$('advancedSettings').open=true;},true);
   form.querySelectorAll('input,select').forEach(input=>input.addEventListener('input',()=>{

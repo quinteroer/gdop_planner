@@ -2,7 +2,37 @@
 (function(root) {
   'use strict';
   const distance2 = (a,b) => (a[0]-b[0])**2+(a[1]-b[1])**2;
+  // Sharma et al., IGRASS2026.pdf, II-A equations 1-3 and II-B.
+  // With fixed count and independent point scores, take the lowest finite GDOPs.
+  // Spacing and eligibility are optional project extensions to that rule.
+  function selectPaper(candidates, values, count, spacing=0, options={}) {
+    if (!Number.isInteger(count) || count<1 || !Number.isFinite(spacing) || spacing<0 ||
+        values.length!==candidates.length)
+      throw Error('Invalid GCP count, scores or spacing.');
+    const ranked=candidates.map((_,i)=>i)
+      .filter(i=>Number.isFinite(values[i]) && values[i]>=0 &&
+        (!options.allowed || options.allowed(candidates[i],i)))
+      .sort((a,b)=>values[a]-values[b] || a-b);
+    const indices=[];
+    for(const i of ranked) {
+      if(indices.length===count)break;
+      if(indices.every(j=>distance2(candidates[i],candidates[j])+1e-9>=spacing*spacing))
+        indices.push(i);
+    }
+    const complete=indices.length===count;
+    const demands=options.demands?.length ? options.demands : candidates;
+    const distances=complete ? demands.map(p=>Math.sqrt(
+      Math.min(...indices.map(i=>distance2(p,candidates[i]))))) : [];
+    const meanGdop=complete ? indices.reduce((sum,i)=>sum+values[i],0)/count : Infinity;
+    return {points:complete?indices.map(i=>candidates[i]):[],
+      values:complete?indices.map(i=>values[i]):[],indices:complete?indices:[],
+      score:meanGdop,meanGdop,maxDistance:complete?Math.max(...distances):Infinity,
+      meanDistance:complete?distances.reduce((a,b)=>a+b,0)/distances.length:Infinity,
+      method:spacing>0?'Paper GDOP ranking with minimum spacing':'Paper GDOP ranking',
+      starts:1,exchanges:0};
+  }
   function optimize(candidates, values, count, spacing, options={}) {
+    if (options.method==='paper-gdop') return selectPaper(candidates,values,count,spacing,options);
     if (!Number.isInteger(count) || count<1 || !Number.isFinite(spacing) || spacing<0)
       throw Error('Invalid GCP count or spacing.');
     const eligible=candidates.map((p,i)=>i).filter(i=>Number.isFinite(values[i]) && (!options.allowed || options.allowed(candidates[i],i)));
@@ -93,5 +123,5 @@
       starts:seeds.length,exchanges,method:'Distributed multi-start exchange',
       greedyScore:validSet(greedy)?metrics(greedy,demands).score:null};
   }
-  const api={optimize};if(typeof module!=='undefined')module.exports=api;else root.GcpNetwork=api;
+  const api={optimize,selectPaper};if(typeof module!=='undefined')module.exports=api;else root.GcpNetwork=api;
 })(typeof window!=='undefined'?window:globalThis);

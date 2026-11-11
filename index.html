@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Flight & GCP Planner</title><link rel="stylesheet" href="planner.css">
-  <script defer src="sites.js"></script><script defer src="optimizer.js"></script><script defer src="capture-planning.js"></script><script defer src="app-model.js"></script><script defer src="gcp-network.js"></script><script defer src="planner-ui.js"></script>
+  <script defer src="sites.js"></script><script defer src="optimizer.js"></script><script defer src="capture-planning.js"></script><script defer src="app-model.js"></script><script defer src="gcp-network.js"></script><script defer src="python-planner.js"></script><script defer src="planner-ui.js"></script>
 </head>
 <body>
   <header class="app-header">
     <div class="brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="m5 24 7-16 8 13 7-15M5 24l15-3M12 8l15-2" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="5" cy="24" r="3" fill="currentColor"/><circle cx="12" cy="8" r="3" fill="currentColor"/><circle cx="20" cy="21" r="3" fill="currentColor"/><circle cx="27" cy="6" r="3" fill="currentColor"/></svg></div>
-    <div><h1>Flight & GCP Planner</h1><p>A better route. Well-placed ground control.</p></div><span class="header-tag">Survey planning</span>
+    <div><h1>Flight & GCP Planner</h1><p>Geometric flight paths and GDOP control planning.</p></div><span class="header-tag">Survey planning</span>
   </header>
   <div class="workspace">
     <aside class="sidebar">
@@ -22,10 +22,13 @@
           <div class="section-title"><span class="step">2</span><h2>Set your requirements</h2></div>
           <label for="cameraProfile">Camera</label><select id="cameraProfile"><option value="mini48">DJI Mini 4 Pro · 48 MP</option><option value="mini12">DJI Mini 4 Pro · 12 MP</option></select>
           <label for="maxGsd">Maximum pixel size <span>cm / pixel</span></label><input id="maxGsd" type="number" value="0.5" min="0.1" max="10" step="0.1" required aria-describedby="gsdHint"><p id="gsdHint" class="hint">Smaller pixels capture more detail and require more photos.</p>
-          <div class="field-pair"><div><label for="numGcps">GCP count</label><input id="numGcps" type="number" value="5" min="4" max="12" step="1" required></div><div><label for="minSpacing">GCP spacing <span>m</span></label><input id="minSpacing" type="number" value="16" min="0" max="200" step="1" required></div></div>
+          <label for="gcpMode">Ground control count</label><select id="gcpMode"><option value="optimize">Optimize count within a range</option><option value="fixed">Use a fixed count</option></select>
+          <div id="countRange" class="field-pair"><div><label for="minGcps">Minimum GCPs</label><input id="minGcps" type="number" value="3" min="3" max="12" step="1" required></div><div><label for="maxGcpDistance">Max. distance to control <span>m</span></label><input id="maxGcpDistance" type="number" min="1" step="1" placeholder="Automatic"></div></div>
+          <div class="field-pair"><div><label id="gcpCountLabel" for="numGcps">Maximum GCPs</label><input id="numGcps" type="number" value="12" min="3" max="12" step="1" required></div><div><label for="minSpacing">GCP spacing <span>m</span></label><input id="minSpacing" type="number" value="16" min="0" max="200" step="1" required></div></div>
         </section>
         <section class="action-section">
           <button id="optimizeMission" class="primary" type="submit"><span>Find best plan</span><span aria-hidden="true">↗</span></button><p class="action-hint">Search flight paths and place GCPs together.</p>
+          <button id="cancelSearch" class="text-button" type="button" hidden>Cancel search</button>
           <progress id="searchProgress" aria-label="Flight plan search progress" hidden></progress><p id="optimizationStatus" class="status-message" role="status" aria-live="polite">Ready when you are.</p>
         </section>
         <details class="advanced" id="advancedSettings">
@@ -34,7 +37,9 @@
             <h3>Flight limits</h3>
             <div class="field-pair"><div><label for="minAltitude">Min. height <span>m</span></label><input id="minAltitude" type="number" value="15" min="10" max="200" required></div><div><label for="maxAltitude">Max. height <span>m</span></label><input id="maxAltitude" type="number" value="60" min="10" max="200" required></div></div><p class="hint">Heights are above the site's reference elevation.</p>
             <div class="field-pair"><div><label for="minClearance">Clearance <span>m</span></label><input id="minClearance" type="number" value="15" min="1" max="200" required></div><div><label for="maxSpeed">Max. speed <span>m/s</span></label><input id="maxSpeed" type="number" value="5" min="0.3" max="16" step="0.1" required></div></div>
-            <label for="priority">Optimize for</label><select id="priority"><option value="time">Shortest estimated flight time</option><option value="distance">Shortest flight distance</option><option value="height">Lowest flight height</option></select>
+            <label for="priority">Optimize for</label><select id="priority"><option value="distance">Shortest flight distance</option><option value="gcp_count">Fewest GCPs, then distance</option><option value="time">Shortest estimated flight time</option><option value="height">Lowest flight height</option></select>
+            <div class="field-pair"><div><label for="turnRadius">Corner rounding <span>m</span></label><input id="turnRadius" type="number" value="5" min="0" max="50" step="1" required></div><div><label for="searchBudget">Route checks per height</label><input id="searchBudget" type="number" value="120" min="20" max="2000" step="20" required></div></div>
+            <p class="hint">Midpoint tours and rounded turns are accepted when coverage passes. More route checks allow a longer search.</p>
             <h3>Photo coverage</h3>
             <div class="field-pair"><div><label for="minForward">Min. forward <span>%</span></label><input id="minForward" type="number" value="80" min="40" max="90" step="1" required></div><div><label for="minSide">Min. side <span>%</span></label><input id="minSide" type="number" value="80" min="30" max="85" step="1" required></div></div>
             <div class="field-pair"><div><label for="shutterDenominator">Shutter <span>1 / second</span></label><input id="shutterDenominator" type="number" value="1000" min="1" max="8000" required></div><div><label for="maxPhotos">Photo limit</label><input id="maxPhotos" type="number" value="3000" min="3" max="5000" step="1" required></div></div>
@@ -46,21 +51,21 @@
           </div>
         </details>
       </form>
-      <div class="algorithm-note"><span class="small-label">How it works</span><p>Compare headings, height and overlap. Check coverage and capture limits. Refine a distributed GCP network.</p></div>
+      <div class="algorithm-note"><span class="small-label">How it works</span><p>Search geometric routes through GCP midpoints, shorten detours and round turns. Check every accepted route against coverage and GDOP limits.</p></div>
     </aside>
     <main class="main">
       <section class="map-panel" aria-label="Survey map">
         <div class="map-toolbar"><div><span class="small-label">Survey area</span><h2 id="mapTitle">Your site</h2></div><span id="planBadge" class="plan-badge">Not optimized</span></div>
         <div class="map-frame"><canvas id="mapCanvas" aria-label="Survey boundary, flight path and numbered GCP locations"></canvas><div id="mapEmpty" class="map-empty">Your flight path and GCP layout will appear here.</div><div class="north-marker" aria-hidden="true">↑<br>N</div></div>
-        <div class="map-footer"><div class="map-key"><span><i class="route-key"></i>Flight path</span><span><i class="gcp-key"></i>GCP location</span><span id="coverageKey" hidden><i class="gap-key"></i>Coverage gap</span></div><label class="check"><input id="showCoverage" type="checkbox"> Show coverage</label></div>
+        <div class="map-footer"><div class="map-key"><span><i class="route-key"></i>Flight path</span><span><i class="gcp-key"></i>GCP location</span><span><i class="midpoint-key"></i>GCP midpoint</span><span id="coverageKey" hidden><i class="gap-key"></i>Coverage gap</span></div><label class="check"><input id="showMidpoints" type="checkbox" checked> Show GCP midpoints</label><label class="check"><input id="showCoverage" type="checkbox"> Show coverage</label></div>
       </section>
       <section class="results" aria-label="Plan results">
         <div class="results-heading"><h2>Your plan</h2><div class="button-pair"><button id="exportFlight" class="secondary" disabled>Download flight</button><button id="exportGcps" class="secondary" disabled>Download GCPs</button></div></div>
         <div id="statsGrid" class="stats-grid">
-          <div class="stat-card"><span>Flight time</span><strong id="resultTime">—</strong><small>Constant-speed estimate</small></div><div class="stat-card"><span>Photos</span><strong id="resultPhotos">—</strong><small id="resultPhotoDetail">Planned capture positions</small></div><div class="stat-card"><span>Flight height</span><strong id="resultHeight">—</strong><small>Above site reference</small></div><div class="stat-card"><span>Ground control</span><strong id="resultGcps">—</strong><small id="resultGcpDetail">Distributed across the site</small></div>
+          <div class="stat-card"><span>Flight time</span><strong id="resultTime">—</strong><small>Constant-speed estimate</small></div><div class="stat-card"><span>Photos</span><strong id="resultPhotos">—</strong><small id="resultPhotoDetail">Planned capture positions</small></div><div class="stat-card"><span>Flight height</span><strong id="resultHeight">—</strong><small>Above site reference</small></div><div class="stat-card"><span>Ground control</span><strong id="resultGcps">—</strong><small id="resultGcpDetail">Selected by GDOP</small></div>
         </div>
         <p id="planSummary" class="plan-summary">Set your requirements and select Find best plan to compare routes.</p>
-        <details id="planDetails" class="result-details" hidden><summary>View plan details</summary><dl id="planMetrics"></dl><h3>GCP coordinates</h3><p id="coordinateInfo" class="hint"></p><div class="table-scroll"><table><thead><tr><th>GCP</th><th>Easting / X (m)</th><th>Northing / Y (m)</th><th>Elevation (m)</th></tr></thead><tbody id="gcpRows"></tbody></table></div><p class="hint">The search returns the best accepted route in its sampled set. GCP locations are refined with multiple starting layouts and point exchanges; neither search proves a global optimum.</p></details>
+        <details id="planDetails" class="result-details" hidden><summary>View plan details</summary><dl id="planMetrics"></dl><h3>GCP coordinates</h3><p id="coordinateInfo" class="hint"></p><div class="table-scroll"><table><thead><tr><th>GCP</th><th>Easting / X (m)</th><th>Northing / Y (m)</th><th>Elevation (m)</th></tr></thead><tbody id="gcpRows"></tbody></table></div><p class="hint">Python evaluates midpoint tours, waypoint changes and rounded turns. GCP locations follow the paper's GDOP ranking with a minimum spacing constraint. The geometric search returns the shortest accepted candidate it finds. Rounded turns are geometric estimates.</p></details>
       </section>
       <p class="planning-note">Planning estimates only. Verify obstacles, access and control coordinates in the field. Pixel size is not survey accuracy; 1 cm accuracy requires independent checkpoints.</p>
     </main>

@@ -1,52 +1,83 @@
-# Flight & GCP Planner
+# Flight and GCP Planner
 
-Open `index.html` in a modern browser. No server, build step, external fonts or package install is needed. Original survey data remains read-only.
+The visualizer runs the callable Python geometric optimizer in a browser worker. It searches GCP-pair midpoints, reorders waypoints using nearest-neighbour and 2-opt, removes detours, and evaluates rounded turns. Every accepted route passes the sampled photo-coverage and GDOP checks.
 
-## Main workflow
+## Open the visualizer
 
-1. Choose an attached site or enter a custom rectangular area's dimensions.
-2. Choose the Mini 4 Pro photo mode, maximum pixel size, GCP count and minimum GCP spacing.
-3. Select **Find best plan**. The app searches flight routes and selects a distributed GCP network for each accepted candidate.
-4. Inspect the route and numbered GCPs, review time/photos/height, then download the flight and GCP CSVs. **View plan details** contains the coordinates and search diagnostics.
+From this repository directory, run:
 
-Changing a planning requirement clears the result and disables downloads until a new plan passes. Toggling coverage only changes the display. Preview imagery remains visible before optimization; unvalidated flight paths and GCPs are not presented as accepted plans.
+```sh
+python -m http.server 8000
+```
 
-**Advanced settings** contains height limits, terrain clearance, maximum speed, optimization priority, minimum overlaps, shutter speed, photo budget, optional terrain line of sight and map refinements. Defaults are 80% forward/side overlap, four usable images and at least 10 degrees viewing spread per sampled terrain patch, a 0.5-pixel translation-blur budget and a minimum flight speed of 0.3 m/s. The overlap search spans the chosen minimum through five percentage points higher, capped at 90% forward and 85% side.
+Open http://localhost:8000. Static hosting such as GitHub Pages also works. Opening index.html directly from disk cannot load the Python worker. The first search downloads the pinned Pyodide 0.29.3 runtime from jsDelivr, so internet access is required. Site coordinates and optimization run inside the browser.
 
-Draw an imaging polygon by choosing **Draw survey boundary**, clicking its corners and selecting **Use boundary**. Simple concave polygons are supported. Straight transit can cross outside that imaging boundary; it is not a flight fence. **Exclude GCP placement** lets you click unsuitable target areas with a configurable radius. Exclusions affect GCP placement, not aircraft travel or required photo coverage. Boundary and exclusion changes require re-optimization.
+1. Choose an attached site or enter custom rectangular dimensions.
+2. Set the camera and maximum ground pixel size. Choose a fixed GCP count or a count range. The automatic maximum distance to control is one-third of the survey diagonal for count search.
+3. Select **Find best plan**. The status shows route checks and altitude. **Cancel search** stops the worker.
+4. Inspect the curved route, numbered GCPs, and optional midpoint markers. Download flight and GCP CSVs.
 
-The photo-quality panel, capture-log import, reconstruction-feedback import, supplemental-view controls, legacy GCP comparison, manual flight sliders and diagnostic layer menus have been removed from the interface. Capture research helpers remain available in the standalone JavaScript module; `CAPTURE_PLANNING.md` records that earlier workflow and is not the current UI guide.
+Advanced settings control height range, clearance, minimum photo overlaps, shutter speed, speed, photo budget, corner rounding, and route checks per height. Increasing the search budget allows more refinement. The default objective is shortest distance. Fewest GCPs, flight time, and lowest height are also available. Changing requirements invalidates downloads until a new plan passes.
 
-## Flight algorithm
+An imaging polygon limits the surveyed samples and GCP candidates. It is not a flight fence. GCP exclusion circles affect target placement. Terrain line-of-sight checks reject hidden views, unknown terrain, and insufficient clearance along the sampled route. Unknown terrain can therefore make an otherwise plausible plan fail.
 
-The discrete search enumerates altitude in 5 m steps and overlap in 5 percentage-point steps, including range endpoints. It automatically compares twelve headings at 15-degree increments, plus the original cardinal-axis grid layouts, so expanding the search preserves the original feasible candidates. All missions use straight survey strips at a constant elevation. Camera orientation is fixed to the short image dimension along flight; the UI no longer asks users to compare unverified camera-roll configurations.
+## Call the Python function
 
-Routes are ranked by estimated flight time by default, with distance and altitude available as advanced priorities. Initial filters enforce sampled terrain clearance, photo budget, worst GSD, minimum speed, image-save interval and translation blur. Timing includes all consecutive capture positions, including row transitions. Ranked candidates undergo visible-image geometry checks and GCP network selection. The first accepted candidate is the best accepted route under that ranking in the sampled set; this is not proof of global optimality or infeasibility.
+No additional Python packages are needed.
 
-The Mini 4 Pro footprint is an ideal nadir rectangle based on 82.1-degree diagonal FOV, 4:3 aspect ratio and 8064 x 6048 or 4032 x 3024 image dimensions. Timed-capture intervals are 5 seconds at 48 MP and 2 seconds at 12 MP. The 24 mm equivalent focal length is not substituted for physical focal length. Speed is capped by requested speed, minimum consecutive capture spacing divided by camera interval, and blur budget times GSD divided by exposure. These ideal estimates require validation with the actual camera workflow.
+```python
+from drone_optimizer import optimize
 
-Time is distance divided by constant speed. It excludes launch, landing, acceleration, turning slowdown, transit to/from the survey, wind and battery stops. The app does not split flights into battery missions or model aircraft dynamics, obstacles, trees, rolling shutter or image-write variability. A DTM is not a model of buildings, dam faces or overhangs. Optional ray sampling rejects terrain occlusion and unknown terrain; it does not certify visibility or clearance between samples.
+points = [(x, y, 0) for y in range(0, 41, 10)
+          for x in range(0, 61, 10)]
+result = optimize(
+    points,
+    width=60,
+    height=40,
+    gcp_count=(3, 8),
+    max_gcp_distance=35,
+    altitudes=(30, 35, 40),
+)
+plan = result['plan']
+if plan is not None:
+    path = plan['path']
+    photo_positions = plan['cams']
+    control_points = plan['gcps']
+```
 
-## GCP algorithm
+All coordinates and distances are local metres. The Python docstring documents camera parameters, optional start/end transit positions, a separate simple flight boundary, terrain callbacks, progress callbacks, and the search budget. `plan` is null when the sampled search finds no accepted route. Python raises ValueError for invalid settings.
 
-Eligible locations must satisfy minimum image count, viewing spread and manual placement exclusions. The deterministic multi-start network search seeds six spatial layouts and retains a valid greedy seed when available. It requires occupied quadrants and an eligible central location when count permits, then improves the set through bounded one- and two-point exchanges.
+## Algorithm and limits
 
-The dimensionless objective combines maximum and mean distance to the nearest GCP, bounded geometry quality and elevation-range representation. Search uses a restricted candidate pool and at most 144 demand samples, then compares final layouts and original seeds against all demand points. This avoids worsening a valid original seed under the full objective, but bounded exchanges can miss better or feasible layouts.
+The pre-flight GDOP formula and fixed-count placement ranking follow Sharma et al., *GDOP-Based GCP Optimization for UAV Photogrammetry*, Section II-A equations 1–3 and II-B. Unit camera-to-point directions form A and the score is sqrt(trace(inverse(A transpose A))). The selector takes the lowest finite point scores, with the requested minimum spacing. Setting `min_gcp_spacing=0` gives the paper's unconstrained ranking on the supplied candidate set.
 
-Network coverage is distance to control, not reconstruction error. Direction-matrix geometry is neither GNSS GDOP nor predicted RMSE. The app does not compute bundle-adjustment covariance, calibration uncertainty, correlated observations, verified image matches or GCP measurement uncertainty. Maximum pixel size does not certify 1 cm horizontal or vertical RMSE; independent surveyed checkpoints are required.
+Count search, maximum distance to control, spacing, midpoint routing, 2-opt and rounded turns are project extensions. Midpoints are optional candidates, accepted when they improve the objective and preserve coverage. The shortest accepted candidate is reported with no global-optimum guarantee. The paper's post-flight and reconstruction experiments have not been reproduced here.
 
-## Files and exports
+The camera is nadir with fixed yaw independent of travel direction. Its ideal footprint enforces the requested overlap conservatively along curved travel. Photos are spaced along the route, and speed respects camera interval and translation-blur limits. The capture budget applies to the actual photo locations. Corner rounding controls geometric trimming and does not certify an aircraft turn radius. Elevation is constant for each candidate mission.
 
-- `index.html`, `planner.css`, `planner-ui.js`: focused interface and interactions.
-- `optimizer.js`: route generation and constrained search.
-- `app-model.js`, `capture-planning.js`: footprint visibility, sampled terrain rays and geometry diagnostics.
-- `gcp-network.js`: distributed GCP network refinement.
-- `sites.js`, `assets/`: prepared terrain and orthomosaic previews.
+Flight CSVs include both route samples and actual photo locations. `capture_photo=true` identifies photos, and elapsed times use route arc length and constant speed. GCP coordinates use EPSG:32618 and EGM96 heights for attached sites, or local metres for custom surveys. Targets are planning suggestions that require field surveying.
 
-GCP exports use EPSG:32618 and EGM96 heights for attached sites. Coordinates are sampled planning suggestions, not surveyed control. Custom sites use local metres. Flight exports include capture positions, estimated elapsed time, footprint heading, nadir tilt, speed and the minimum supported capture interval; they are not executable autopilot missions. `photo_interval_s` is the camera's minimum timed interval, not a promise that every capture occurs exactly that far apart.
+Distance to control and GDOP are planning metrics. Validate mapping accuracy with independent checkpoints. The sampled terrain model does not include trees, buildings, wind, launch/landing, acceleration, or battery stops.
+
+## Files
+
+- `drone_optimizer.py` is the standalone Python implementation.
+- `planner_request.py` converts visualizer settings to the function call.
+- `python-worker.js` loads Pyodide and executes that same Python code.
+- `python-planner.js` manages worker progress/cancellation and adapts results for drawing and CSV exports.
+- `planner-ui.js`, `index.html`, and `planner.css` implement the visualizer.
+- `sites.js` and `assets/` provide prepared terrain and map previews.
+- The original JavaScript algorithm modules remain available for existing library callers and comparison tests. The visualizer uses the Python implementation.
 
 ## Verification
 
-Run `node optimizer.test.cjs`, `node network.test.cjs` and `node capture-planning.test.cjs` for algorithm checks. `node verify.cjs` verifies the focused UI across all three sites, timing/spacing exports, invalidation and mobile layout. `node verify-capture.cjs` checks advanced boundary drawing, exclusions, terrain visibility and failure states. Browser tests currently reference this workspace's bundled Playwright and Chromium paths. Software tests do not establish flight safety or field accuracy.
+```sh
+python -m unittest -v test_drone_optimizer test_planner_request
+node optimizer.test.cjs
+node network.test.cjs
+node capture-planning.test.cjs
+```
+
+With Playwright and Chromium installed, `node verify-python.cjs` starts a temporary static server and checks the actual browser Python worker, count search, rounded route, capture exports, failure, cancellation/retry, and mobile layout. Set PLAYWRIGHT_MODULE and CHROMIUM_PATH when using bundled browser tools. The browser test needs internet access for Pyodide. The older `verify.cjs` and `verify-capture.cjs` now expect the static server at port 8000, or GDOP_TEST_URL. Their existing bundled Playwright paths remain supported.
 
 Adapted from https://github.com/quinteroer/gdop_planner.
