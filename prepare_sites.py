@@ -62,6 +62,11 @@ def build():
                           gridSize=n, elevations=elevations, groundReference=float(np.median(valid)),
                           image='assets/' + slug + '.png', terrainSource=dtm_path.name,
                           imageSource=ortho_path.name))
+        mesh_manifest = assets / 'meshes' / slug / 'manifest.json'
+        if mesh_manifest.exists():
+            mesh = json.loads(mesh_manifest.read_text(encoding='utf-8'))
+            if mesh['crs'] == 'EPSG:32618' and abs(mesh['origin'][0]-west)<.001 and abs(mesh['origin'][1]-south)<.001:
+                sites[-1]['sceneMesh'] = f'assets/meshes/{slug}/manifest.json'
     (ROOT / 'sites.js').write_text('window.SURVEY_SITES = ' + json.dumps(sites, allow_nan=False) + ';\n', encoding='utf-8')
     print(json.dumps([{k: s[k] for k in ('name', 'width', 'height', 'groundReference')} for s in sites], indent=2))
 

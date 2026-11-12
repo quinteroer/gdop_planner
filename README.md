@@ -17,11 +17,13 @@ Open http://localhost:8000. Static hosting such as GitHub Pages also works. Open
 3. Select **Find best plan**. The status shows route checks and altitude. **Cancel search** stops the worker.
 4. Inspect the curved route, numbered GCPs, and optional midpoint markers. Download flight and GCP CSVs.
 
-The map opens in **3D terrain** view using the same elevation grid as the optimizer. The existing orthomosaic is draped over the elevation surface. Drag to orbit, scroll to zoom, and Shift-drag or right-drag to pan. Touch supports a two-finger pinch and pan. Arrow keys rotate, plus/minus zoom, and zero resets the camera. **Reset view** restores the initial viewpoint.
+The map opens in **3D terrain** using **Original 3D mesh** for the supplied sites. This uses the original ArcGIS SLPK geometry and its texture atlases, converted into the planner's local UTM coordinates. It is a reduced-detail copy for browser performance, rather than an overhead image stretched over the ground grid. The source EGM96 elevations and vertex UVs are preserved. The original mesh is displayed at 1× true scale.
 
-**Vertical scale** defaults to 1× true scale. The optional 2× and 5× settings exaggerate heights for inspection and affect only the display. Flight and GCP elevations remain in metres. The three supplied sites use 51 × 51 sampled DTM grids, with missing samples left as gaps. The ground elevation range and datum appear above the map. Custom dimension-only areas use flat ground at 0 m.
+Choose **Ground elevations (DTM)** to inspect the bare-earth height samples as a shaded surface. This view deliberately uses no overhead image texture, so roof pixels cannot be mistaken for building geometry. The optional 2× and 5× vertical scales apply only to this ground view and affect display only. The three supplied sites use 51 × 51 DTM grids for optimization, with missing samples left as gaps. Custom dimension-only areas use flat ground at 0 m. The 2D map continues to use the orthomosaic.
 
-Use **2D map** for boundary and exclusion editing. Choosing a drawing tool automatically switches to the top-down view. Returning to 3D retains accepted boundaries, exclusions, and optimization results. Ground targets, midpoint candidates, and the airborne flight route share the same local coordinate system. Labels and route lines overlay the terrain for visibility. The renderer uses native Canvas with perspective projection and depth-sorted terrain triangles.
+Drag to orbit, scroll to zoom, and Shift-drag or right-drag to pan. Touch supports a two-finger pinch and pan. Arrow keys rotate, plus/minus zoom, and zero resets the camera. **Reset view** restores the initial viewpoint. The scene mesh uses WebGL depth testing. If WebGL or mesh loading is unavailable, a labelled ground view is shown.
+
+Use **2D map** for boundary and exclusion editing. Choosing a drawing tool automatically switches to the top-down view. Returning to 3D retains accepted boundaries, exclusions, and optimization results. Ground targets and the airborne route share the same projected coordinate system. Labels and route lines overlay the mesh for visibility. Mesh display is separate from the existing DTM-based optimization.
 
 Advanced settings control height range, clearance, minimum photo overlaps, shutter speed, speed, photo budget, corner rounding, and route checks per height. Increasing the search budget allows more refinement. The default objective is shortest distance. Fewest GCPs, flight time, and lowest height are also available. Changing requirements invalidates downloads until a new plan passes.
 
@@ -71,7 +73,10 @@ Distance to control and GDOP are planning metrics. Validate mapping accuracy wit
 - `planner_request.py` converts visualizer settings to the function call.
 - `python-worker.js` loads Pyodide and executes that same Python code.
 - `python-planner.js` manages worker progress/cancellation and adapts results for drawing and CSV exports.
-- `terrain-view.js` renders textured 3D terrain and handles orbit, pan, zoom, and touch controls.
+- `terrain-view.js` handles orbit controls, shaded ground terrain, and planning overlays.
+- `mesh-surface.js` renders the original texture atlases and depth-tested scene geometry.
+- `assets/meshes/` contains the reduced-detail mesh buffers, textures, and coordinate manifests.
+- `prepare_meshes.py` rebuilds those assets from the original SLPK packages. It needs numpy, Pillow, and pyproj at build time, with no extra browser runtime libraries.
 - `planner-ui.js`, `index.html`, and `planner.css` implement the visualizer.
 - `sites.js` and `assets/` provide prepared terrain and map previews.
 - The original JavaScript algorithm modules remain available for existing library callers and comparison tests. The visualizer uses the Python implementation.
@@ -79,12 +84,13 @@ Distance to control and GDOP are planning metrics. Validate mapping accuracy wit
 ## Verification
 
 ```sh
+python verify_mesh_assets.py
 python -m unittest -v test_drone_optimizer test_planner_request
 node optimizer.test.cjs
 node network.test.cjs
 node capture-planning.test.cjs
 ```
 
-With Playwright and Chromium installed, `node verify-python.cjs` starts a temporary static server and checks the actual browser Python worker, count search, rounded route, capture exports, failure, cancellation/retry, and mobile layout. Set PLAYWRIGHT_MODULE and CHROMIUM_PATH when using bundled browser tools. The browser test needs internet access for Pyodide. `node verify-3d.cjs` checks real elevation ranges, mouse and touch controls, keyboard/reset, automatic 2D editing, the actual Python route overlay, and mobile layout. It uses the same browser environment variables. The older `verify.cjs` and `verify-capture.cjs` now expect the static server at port 8000, or GDOP_TEST_URL. Their existing bundled Playwright paths remain supported.
+With Playwright and Chromium installed, `node verify-python.cjs` starts a temporary static server and checks the actual browser Python worker, count search, rounded route, capture exports, failure, cancellation/retry, and mobile layout. Set PLAYWRIGHT_MODULE and CHROMIUM_PATH when using bundled browser tools. The browser test needs internet access for Pyodide. `node verify-3d.cjs` checks original-mesh loading, ground-mode switching, real elevation ranges, mouse and touch controls, keyboard/reset, automatic 2D editing, the actual Python route overlay, and mobile layout. It uses the same browser environment variables. The older `verify.cjs` and `verify-capture.cjs` now expect the static server at port 8000, or GDOP_TEST_URL. Their existing bundled Playwright paths remain supported.
 
 Adapted from https://github.com/quinteroer/gdop_planner.

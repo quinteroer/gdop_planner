@@ -123,7 +123,7 @@
     viewMode=mode;terrainView.setEnabled(mode==='3d');
     $('view3d').setAttribute('aria-pressed',String(mode==='3d'));
     $('view2d').setAttribute('aria-pressed',String(mode==='2d'));
-    $('resetView').disabled=mode==='2d';$('verticalScale').disabled=mode==='2d';
+    $('resetView').disabled=mode==='2d';$('surfaceStatus').hidden=mode==='2d';
     canvas.parentElement.querySelector('.north-marker').hidden=mode==='3d';
     $('viewInstructions').textContent=mode==='3d'
       ?'Drag to orbit · Scroll or pinch to zoom · Shift-drag or two fingers to pan'
@@ -134,13 +134,19 @@
     draw();
   }
   function draw(){
+    const originalMesh=$('surfaceModel').value==='mesh'&&site?.sceneMesh;
+    $('surfaceModel').disabled=viewMode==='2d'||!site?.sceneMesh;
+    $('verticalScale').disabled=viewMode==='2d'||!!originalMesh;
+    if(originalMesh){$('verticalScale').value='1';terrainView.exaggeration=1;}
+    terrainView.model=$('surfaceModel').value;
     if(viewMode==='3d'){
       transform=null;
       const {width,height}=dimensions();
       if(Number.isFinite(width)&&Number.isFinite(height)&&width>0&&height>0)
         terrainView.render({site,width,height,image,plan,boundary,exclusions,terrainAt,
           showCoverage:$('showCoverage').checked,showMidpoints:$('showMidpoints').checked});
-      else{ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);}
+      else{ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);terrainView.surfaceRenderer.canvas.hidden=true;}
+      $('surfaceStatus').textContent=terrainView.status;
       return;
     }
     const box=canvas.getBoundingClientRect(),w=box.width,h=box.height,dpr=window.devicePixelRatio||1;
@@ -200,6 +206,7 @@
   $('view3d').addEventListener('click',()=>setViewMode('3d'));
   $('view2d').addEventListener('click',()=>setViewMode('2d'));
   $('resetView').addEventListener('click',()=>{terrainView.reset();draw();});
+  $('surfaceModel').addEventListener('change',draw);
   $('verticalScale').addEventListener('change',()=>{terrainView.exaggeration=number('verticalScale');draw();});
   canvas.addEventListener('dblclick',()=>{if(viewMode==='3d'){terrainView.reset();draw();}});
   $('cancelSearch').addEventListener('click',()=>PythonPlanner.cancel());

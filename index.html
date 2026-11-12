@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Flight & GCP Planner</title><link rel="stylesheet" href="planner.css">
-  <script defer src="sites.js"></script><script defer src="optimizer.js"></script><script defer src="capture-planning.js"></script><script defer src="app-model.js"></script><script defer src="gcp-network.js"></script><script defer src="python-planner.js"></script><script defer src="terrain-view.js"></script><script defer src="planner-ui.js"></script>
+  <script defer src="sites.js"></script><script defer src="optimizer.js"></script><script defer src="capture-planning.js"></script><script defer src="app-model.js"></script><script defer src="gcp-network.js"></script><script defer src="python-planner.js"></script><script defer src="mesh-surface.js"></script><script defer src="terrain-view.js"></script><script defer src="planner-ui.js"></script>
 </head>
 <body>
   <header class="app-header">
@@ -58,8 +58,10 @@
         <div class="map-toolbar"><div><span class="small-label">Survey area</span><h2 id="mapTitle">Your site</h2></div><span id="planBadge" class="plan-badge">Not optimized</span></div>
         <div class="view-controls" aria-label="Map viewpoint">
           <div class="view-buttons"><button id="view3d" type="button" class="secondary" aria-pressed="true">3D terrain</button><button id="view2d" type="button" class="secondary" aria-pressed="false">2D map</button><button id="resetView" type="button" class="text-button">Reset view</button></div>
+          <label for="surfaceModel">Surface <select id="surfaceModel"><option value="mesh">Original 3D mesh</option><option value="ground">Ground elevations (DTM)</option></select></label>
           <label for="verticalScale">Vertical scale <select id="verticalScale"><option value="1">1× true scale</option><option value="2">2×</option><option value="5">5×</option></select></label>
         </div>
+        <p id="surfaceStatus" class="terrain-info" role="status" aria-live="polite"></p>
         <p id="terrainInfo" class="terrain-info"></p>
         <div class="map-frame"><canvas id="mapCanvas" tabindex="0" aria-label="3D terrain, flight path and GCPs. Drag to orbit, scroll to zoom, Shift-drag to pan. Arrow keys rotate, plus and minus zoom, zero resets."></canvas><div id="mapEmpty" class="map-empty">Your flight path and GCP layout will appear here.</div><div class="north-marker" aria-hidden="true">↑<br>N</div></div>
         <p id="viewInstructions" class="view-instructions">Drag to orbit · Scroll or pinch to zoom · Shift-drag or two fingers to pan</p>

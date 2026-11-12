@@ -5,6 +5,7 @@
   class TerrainView {
     constructor(canvas,onChange){
       this.canvas=canvas;this.ctx=canvas.getContext('2d');this.onChange=onChange;
+      this.surfaceRenderer=new MeshSurface(canvas,onChange);this.model='mesh';this.status='';
       this.scene=null;this.mesh=[];this.meshKey=null;this.enabled=false;
       this.exaggeration=1;this.pointers=new Map();this.reset();
       canvas.addEventListener('pointerdown',event=>{
@@ -57,6 +58,7 @@
     }
     setEnabled(value){
       this.enabled=value;this.pointers.clear();this.gesture=null;
+      if(!value)this.surfaceRenderer.canvas.hidden=true;
       this.canvas.classList.toggle('orbiting',value);
     }
     prepare(scene){
@@ -84,10 +86,23 @@
       if(!w||!h||!(scene.width>0&&scene.height>0))return;
       const dpr=window.devicePixelRatio||1;
       this.canvas.width=Math.round(w*dpr);this.canvas.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);
-      ctx.fillStyle='#152938';ctx.fillRect(0,0,w,h);
-      const highest=Math.max(this.zMax,scene.plan?.cams[0]?.[2]??this.zMax);
-      const center=[scene.width/2,scene.height/2,(this.zMin+highest)/2];
-      const radius=Math.max(1,Math.hypot(scene.width,scene.height,(highest-this.zMin)*this.exaggeration)/2);
+      const requested=this.model==='mesh'&&scene.site?.sceneMesh;
+      const record=requested?this.surfaceRenderer.state(scene.site.sceneMesh):null;
+      if(record?.manifest&&!record.error){
+        const origin=record.manifest.origin;
+        if(!origin||Math.abs(origin[0]-scene.site.west)>.001||Math.abs(origin[1]-scene.site.south)>.001)
+          record.error='The mesh origin does not match this survey. Ground view shown.';
+      }
+      const meshReady=record&&!record.loading&&!record.error;
+      const bounds=meshReady?record.manifest.bounds:[[0,0,this.zMin],[scene.width,scene.height,this.zMax]];
+      this.status=requested?(record.error|| (record.loading?'Loading original textured 3D mesh…':`Original textured 3D mesh · ${record.manifest.source} · ${(record.manifest.vertices/3).toLocaleString()} triangles`))
+        :(scene.site?'Ground DTM · bare-earth elevations, shaded without overhead imagery':'Custom flat ground at 0 m');
+      const low=[Math.min(0,bounds[0][0]),Math.min(0,bounds[0][1]),Math.min(this.zMin,bounds[0][2])];
+      const high=[Math.max(scene.width,bounds[1][0]),Math.max(scene.height,bounds[1][1]),Math.max(this.zMax,bounds[1][2],scene.plan?.cams[0]?.[2]??this.zMax)];
+      const center=low.map((v,i)=>(v+high[i])/2);
+      const radius=Math.max(1,Math.hypot(high[0]-low[0],high[1]-low[1],(high[2]-low[2])*this.exaggeration)/2);
+      if(!meshReady){this.surfaceRenderer.canvas.hidden=true;ctx.fillStyle='#152938';ctx.fillRect(0,0,w,h);}
+      else ctx.clearRect(0,0,w,h);
       const focal=h/(2*Math.tan(Math.PI/8));
       // Fit both narrow phone canvases and wide desktop canvases.
       const fov=Math.min(Math.PI/4,2*Math.atan(w/(2*focal)));
@@ -100,6 +115,7 @@
           y:h/2+this.pan[1]-focal*(-x*cy*sp-y*sy*sp+z*cp)/depth,depth};
       };
       this.project=project;
+      if(meshReady)this.surfaceRenderer.render(record,{w,h,dpr,center,yaw:this.yaw,pitch:this.pitch,distance,focal,pan:this.pan});
       const floor=this.zMin-Math.max(1,(this.zMax-this.zMin)*.1);
       const line=(points,color,width=1,dash=[])=>{
         if(points.length<2)return;
@@ -107,16 +123,15 @@
         ctx.strokeStyle=color;ctx.lineWidth=width;ctx.setLineDash(dash);ctx.stroke();ctx.setLineDash([]);
       };
       const step=Math.max(5,10**Math.floor(Math.log10(Math.max(scene.width,scene.height)/6)));
-      for(let x=0;x<=scene.width;x+=step)line([[x,0,floor],[x,scene.height,floor]],'#42606a60');
-      for(let y=0;y<=scene.height;y+=step)line([[0,y,floor],[scene.width,y,floor]],'#42606a60');
-      const triangles=this.mesh.map(vertices=>({vertices,screen:vertices.map(project)}));
+      if(!meshReady)for(let x=0;x<=scene.width;x+=step)line([[x,0,floor],[x,scene.height,floor]],'#42606a60');
+      if(!meshReady)for(let y=0;y<=scene.height;y+=step)line([[0,y,floor],[scene.width,y,floor]],'#42606a60');
+      const triangles=meshReady?[]:this.mesh.map(vertices=>({vertices,screen:vertices.map(project)}));
       triangles.sort((a,b)=>b.screen.reduce((s,p)=>s+p.depth,0)-a.screen.reduce((s,p)=>s+p.depth,0));
-      for(const {vertices,screen} of triangles){
+      if(!meshReady)for(const {vertices,screen} of triangles){
         const z=vertices.reduce((sum,p)=>sum+p[2],0)/3;
         const t=(z-this.zMin)/Math.max(.1,this.zMax-this.zMin);
         ctx.beginPath();screen.forEach((q,i)=>{if(i)ctx.lineTo(q.x,q.y);else ctx.moveTo(q.x,q.y);});ctx.closePath();
         ctx.fillStyle=`hsl(${165-t*65} 23% ${29+t*20}%)`;ctx.fill();
-        if(scene.image?.complete&&scene.image.naturalWidth)this.texture(vertices,screen,scene);
         const [a,b,c]=vertices;
         const ux=b[0]-a[0],uy=b[1]-a[1],uz=(b[2]-a[2])*this.exaggeration;
         const vx=c[0]-a[0],vy=c[1]-a[1],vz=(c[2]-a[2])*this.exaggeration;
@@ -159,19 +174,6 @@
       }
       ctx.fillStyle='#d4e8e9';ctx.font='11px Segoe UI, sans-serif';ctx.textAlign='left';
       ctx.fillText(`${this.exaggeration}× vertical scale`,15,h-17);
-    }
-    texture(vertices,screen,scene){
-      const ctx=this.ctx,image=scene.image;
-      const source=vertices.map(p=>[p[0]/scene.width*image.naturalWidth,(1-p[1]/scene.height)*image.naturalHeight]);
-      const [[u0,v0],[u1,v1],[u2,v2]]=source,[a,b,c]=screen;
-      const determinant=(u1-u0)*(v2-v0)-(u2-u0)*(v1-v0);
-      if(Math.abs(determinant)<1e-9)return;
-      const xx=((b.x-a.x)*(v2-v0)-(c.x-a.x)*(v1-v0))/determinant;
-      const xy=((c.x-a.x)*(u1-u0)-(b.x-a.x)*(u2-u0))/determinant;
-      const yx=((b.y-a.y)*(v2-v0)-(c.y-a.y)*(v1-v0))/determinant;
-      const yy=((c.y-a.y)*(u1-u0)-(b.y-a.y)*(u2-u0))/determinant;
-      ctx.save();ctx.clip();ctx.transform(xx,yx,xy,yy,a.x-xx*u0-xy*v0,a.y-yx*u0-yy*v0);
-      ctx.drawImage(image,0,0);ctx.restore();
     }
   }
   root.TerrainView=TerrainView;

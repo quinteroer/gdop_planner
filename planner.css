@@ -23,3 +23,6 @@ label{font-size:12px;font-weight:550;display:flex;justify-content:space-between;
 .view-instructions{margin:0;padding:9px 20px 0;font-size:11px;color:var(--muted)}
 #mapCanvas.orbiting{cursor:grab;touch-action:none}#mapCanvas.orbiting:active{cursor:grabbing}
 @media(max-width:780px){.view-controls{padding:0 14px 8px}.terrain-info,.view-instructions{padding-left:14px;padding-right:14px}}
+
+.mesh-surface{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0}
+#mapCanvas{position:relative;z-index:1}.map-empty,.north-marker{z-index:2}
