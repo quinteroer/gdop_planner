@@ -41,10 +41,10 @@
     }
     return {state:{...state,altitude:p.altitude_m,numGcps:p.gcp_count},
       cams:p.cams,path:merged,points:result.points,
-      gcps:{points:p.gcps,values:p.gcp_indices.map(i=>p.analysis[i].gdop),
-        maxDistance:p.max_gcp_distance,meanGdop:p.mean_gdop},
+      gcps:{points:p.gcps,values:p.gcp_values??p.gcp_indices.map(i=>p.analysis[i].gdop),
+        maxDistance:p.max_gcp_distance,meanGdop:p.mean_gdop,viewCounts:p.gcp_view_counts??p.gcp_indices.map(i=>p.analysis[i].views)},
       analysis:{values:p.analysis.map(v=>v.gdop),counts:p.analysis.map(v=>v.views),angles:p.analysis.map(v=>v.view_spread_deg)},
-      clearance:p.clearance_m,
+      clearance:p.clearance_m,heatmap:p.gdop_heatmap,placementAllowed:p.placement_allowed,
       route:{axis:p.camera_heading_deg,distance:p.distance_m,time:p.time_s,photos:p.cams.length,
         speed:p.speed_m_s,gsd:p.gsd_m,interval:p.photo_interval_s,rounded:p.rounded_turns},
       midpoints:p.gcp_pair_midpoints,midpointPassage:p.midpoint_passage,

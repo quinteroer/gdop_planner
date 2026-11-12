@@ -112,7 +112,7 @@ def _photos(path, spacing):
     return photos
 
 
-def _analyze(points, cameras, camera, terrain_at, ray_step, requirements=None):
+def _analyze(points, cameras, camera, terrain_at, ray_step, requirements=None, occlusion_tolerance=.05):
     width_per_height = camera['sensor_width_mm'] / camera['focal_length_mm']
     height_per_height = camera['sensor_height_mm'] / camera['focal_length_mm']
     radians = math.radians(camera['heading_deg'])
@@ -126,10 +126,23 @@ def _analyze(points, cameras, camera, terrain_at, ray_step, requirements=None):
     cell = max(radius_x,radius_y,1.0)
     bins = {}
     for position in cameras:
+        if terrain_at is not None:
+            surface=terrain_at(position[0],position[1])
+            if surface is None or not math.isfinite(surface) or position[2]<=surface+occlusion_tolerance:
+                continue
         key = (math.floor(position[0]/cell),math.floor(position[1]/cell))
         bins.setdefault(key,[]).append(position)
     records = []
     for point in points:
+        if terrain_at is not None:
+            surface=terrain_at(point[0],point[1])
+            # A height field models cover as opaque above the ground target.
+            # Such a target contributes no camera observation rows to A.
+            if surface is None or not math.isfinite(surface) or surface>point[2]+occlusion_tolerance:
+                records.append({'gdop':math.inf,'views':0,'view_spread_deg':0.0})
+                if requirements is not None:
+                    return None
+                continue
         nearby = []
         for x in range(math.floor((point[0]-radius_x)/cell),math.floor((point[0]+radius_x)/cell)+1):
             for y in range(math.floor((point[1]-radius_y)/cell),math.floor((point[1]+radius_y)/cell)+1):
@@ -147,7 +160,7 @@ def _analyze(points, cameras, camera, terrain_at, ray_step, requirements=None):
                 for k in range(1, steps):
                     t = k / steps
                     z = terrain_at(point[0] + t*(position[0]-point[0]), point[1] + t*(position[1]-point[1]))
-                    if z is None or not math.isfinite(z) or z > point[2] + t*height + .05:
+                    if z is None or not math.isfinite(z) or z > point[2] + t*height + occlusion_tolerance:
                         blocked = True
                         break
                 if blocked:
@@ -176,11 +189,11 @@ def _analyze(points, cameras, camera, terrain_at, ray_step, requirements=None):
     return records
 
 
-def _select_gcps(points, analysis, count, spacing, exclusions):
+def _select_gcps(points, analysis, count, spacing, exclusions, allowed=None):
     ranked = sorted(range(len(points)), key=lambda i: (analysis[i]['gdop'], i))
     chosen = []
     for i in ranked:
-        if not math.isfinite(analysis[i]['gdop']):
+        if (allowed is not None and not allowed[i]) or not math.isfinite(analysis[i]['gdop']):
             continue
         if any(_distance(points[i], (e['x'], e['y'])) < e['radius'] for e in exclusions):
             continue
@@ -200,7 +213,8 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
              boundary=None, flight_boundary=None, terrain_at=None,
              exclusions=(), start=None, end=None, turn_radius=5.0,
              path_step=2.0, improvement_passes=2, objective="distance",
-             max_route_evaluations=None, on_progress=None):
+             max_route_evaluations=None, on_progress=None,
+             gcp_allowed=None, surface_at=None):
     """Return {'plan': dict or None, 'diagnostics': dict}.
 
     All coordinates and distances are local metres. Camera defaults model the
@@ -216,6 +230,10 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
     area. flight_boundary is a separate simple polygon that confines aircraft.
     No-fly holes are unsupported. terrain_at(x,y) returns elevation or None for
     unknown terrain. Without it clearance uses the highest supplied elevation.
+
+    gcp_allowed(point) is a hard placement filter. surface_at(x,y) optionally
+    checks GCP observation rays against a canopy/building surface model.
+    Surface checks allow 0.5 m for DSM/DTM ground-model disagreement.
 
     Routes compare coverage grids against midpoint-based tours, reorder using
     nearest-neighbour and 2-opt, and remove waypoints only after full revalidation.
@@ -280,12 +298,14 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
     points = [p for p in points if _inside(p, boundary)]
     if not points:
         raise ValueError('No terrain samples inside the imaging boundary')
+    placement_allowed=[bool(gcp_allowed(p)) if gcp_allowed else True for p in points]
     for endpoint in (start, end):
         if endpoint is not None and (len(endpoint) != 2 or not all(math.isfinite(v) for v in endpoint) or not _inside(endpoint, flight_boundary)):
             raise ValueError('Start and end must be finite [x,y] locations inside the flight boundary')
     for exclusion in exclusions:
         if not all(math.isfinite(exclusion[k]) for k in ('x','y','radius')) or exclusion['radius'] < 0:
             raise ValueError('Invalid GCP exclusion')
+    placement_allowed=[allowed and not any(_distance(p,(e['x'],e['y']))<e['radius'] for e in exclusions) for p,allowed in zip(points,placement_allowed)]
     count_range = (gcp_count, gcp_count) if isinstance(gcp_count, int) else tuple(gcp_count)
     if len(count_range) != 2 or any(not isinstance(n, int) or isinstance(n, bool) for n in count_range) or not 1 <= count_range[0] <= count_range[1]:
         raise ValueError('gcp_count must be a positive integer or inclusive range')
@@ -383,6 +403,9 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
         return min(routes,key=lambda r:sum(travel(a,b) for a,b in zip(r,r[1:]))) if routes else []
 
     for altitude in altitudes:
+        if sum(placement_allowed)<count_min:
+            failures['insufficient_open_ground']=1
+            break
         altitude_evaluations = 0
         elevation = ground + altitude
         highest, lowest = max(p[2] for p in points), min(p[2] for p in points)
@@ -439,8 +462,14 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
             if analysis is None:
                 failures['coverage_or_gdop'] += 1
                 return None
+            gcp_analysis=analysis
+            eligible=placement_allowed[:]
+            if surface_at is not None:
+                gcp_analysis=_analyze(points,photos,cam,surface_at,path_step,occlusion_tolerance=.5)
+                eligible=[allowed and r['views']>=min_views and r['view_spread_deg']>=min_view_spread and r['gdop']<=max_gdop
+                          for allowed,r in zip(placement_allowed,gcp_analysis)]
             for count in range(count_min,min(count_max,len(points))+1):
-                indices = _select_gcps(points,analysis,count,min_gcp_spacing,exclusions)
+                indices = _select_gcps(points,gcp_analysis,count,min_gcp_spacing,exclusions,eligible)
                 if not indices:
                     continue
                 distances = [min(_distance(p,points[i]) for i in indices) for p in points]
@@ -449,7 +478,12 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
                 distance = sum(_distance(a,b) for a,b in zip(path,path[1:]))
                 return dict(path=[(x,y,elevation) for x,y in path],cams=photos,
                             gcps=[points[i] for i in indices],gcp_indices=indices,
-                            gcp_count=count,mean_gdop=sum(analysis[i]['gdop'] for i in indices)/count,
+                            gcp_count=count,mean_gdop=sum(gcp_analysis[i]['gdop'] for i in indices)/count,
+                            gcp_values=[gcp_analysis[i]['gdop'] for i in indices],
+                            gcp_view_counts=[gcp_analysis[i]['views'] for i in indices],
+                            placement_allowed=placement_allowed,
+                            gdop_heatmap=[r['gdop'] if math.isfinite(r['gdop']) else None for r in gcp_analysis],
+                            gdop_view_counts=[r['views'] for r in gcp_analysis],
                             max_gcp_distance=max(distances),analysis=analysis,
                             distance_m=distance,time_s=distance/speed,speed_m_s=speed,
                             altitude_m=altitude,elevation_m=elevation,
@@ -566,4 +600,6 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
             'shortest_grid_seed_m':min(seed_distances) if seed_distances else None,
             'midpoint_routes_attempted':midpoint_trials,
             'terrain_check':'Sampled height callback' if terrain_at else 'Highest supplied terrain sample',
-            'midpoint_rule':'Pairwise GCP midpoints are optional route candidates'}}
+            'midpoint_rule':'Pairwise GCP midpoints are optional route candidates',
+            'eligible_gcp_samples':sum(placement_allowed),
+            'gcp_surface_visibility':surface_at is not None}}

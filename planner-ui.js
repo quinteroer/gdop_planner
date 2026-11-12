@@ -21,6 +21,15 @@
     const n=site.gridSize,col=Math.round(x/width*(n-1)),row=Math.round(y/height*(n-1));
     return site.elevations[row*n+col];
   }
+  function surfaceAt(x,y){
+    const grid=site?.surfaceGrid;if(!grid)return terrainAt(x,y);
+    const {width,height}=dimensions();if(x<0||y<0||x>width||y>height)return null;
+    const n=grid.gridSize;return grid.elevations[Math.round(y/height*(n-1))*n+Math.round(x/width*(n-1))];
+  }
+  function placementAllowed(p){
+    if(!site?.gcpPlacement)return true;
+    const n=site.gridSize;return site.gcpPlacement.allowed[Math.round(p[1]/site.height*(n-1))*n+Math.round(p[0]/site.width*(n-1))];
+  }
   function surfacePoints(){
     const {width,height}=dimensions(),n=site?.gridSize||26,points=[];
     for(let row=0;row<n;row++)for(let col=0;col<n;col++){
@@ -51,6 +60,10 @@
     $('mapTool').value='view';updateMapTool();$('mapToolStatus').textContent='';
     $('customDimensions').hidden=!!site;['siteWidth','siteHeight'].forEach(id=>$(id).disabled=!!site);
     $('mapTitle').textContent=site?.name||'Custom survey area';
+    $('avoidTrees').disabled=!site?.gcpPlacement;
+    $('placementHint').textContent=site?.gcpPlacement
+      ?`DSM/DTM screening excludes raised cover over ${site.gcpPlacement.maxRaisedHeightM} m and keeps a ${site.gcpPlacement.bufferM} m buffer. GDOP always uses DSM visibility when surface data is available. Review targets in the field.`
+      :'Automatic vegetation screening needs DSM and DTM data. Use manual exclusions for custom areas.';
     updateSiteInfo();invalidate('Ready when you are.');
     if(site){const next=new Image();image=next;next.onload=()=>{if(image===next)draw();};next.onerror=()=>{if(image===next){image=null;draw();}};next.src=site.image;}
   }
@@ -79,6 +92,9 @@
         maxGcpDistance:$('gcpMode').value==='optimize'&&$('maxGcpDistance').value.trim()?number('maxGcpDistance'):null,
         turnRadius:number('turnRadius'),searchBudget:number('searchBudget'),
         checkTerrain:$('terrainSight').checked,
+        avoidRaisedCover:$('avoidTrees').checked,
+        placementGrid:site?.gcpPlacement?{gridSize:site.gridSize,allowed:site.gcpPlacement.allowed}:null,
+        surfaceGrid:site?.surfaceGrid||null,
         terrainGrid:site?{gridSize:site.gridSize,elevations:site.elevations}:null};
       const result=await PythonPlanner.solve(request,message=>{
         if(message.type==='status')setStatus(message.message);
@@ -86,7 +102,7 @@
       });
       if(!result.plan){
         badge(plan?'Previous plan retained':'No plan found');
-        setStatus(`No plan met all requirements in this search.${plan?' Your previous plan is retained.':''} Try a larger pixel size, a wider height range, or smaller GCP spacing.${$('terrainSight').checked?' Terrain visibility also rejects paths through missing terrain data.':''}`,true);
+        setStatus(`No plan met all requirements in this search.${plan?' Your previous plan is retained.':''} Try a larger pixel size, a wider height range, or smaller GCP spacing. Open-ground and visibility limits can also reduce available targets.${$('terrainSight').checked?' Terrain visibility also rejects paths through missing terrain data.':''}`,true);
       }else{
         plan=PythonPlanner.adapt(result,state);searchReport=result.diagnostics;badge('Plan ready','ready');
         setStatus(`Plan found. Coverage checked; ${plan.gcps.points.length} GCPs placed.`);
@@ -110,8 +126,8 @@
     $('resultTime').innerHTML=`${(r.time/60).toFixed(1)} <em>min</em>`;$('resultPhotos').textContent=r.photos.toLocaleString();
     $('resultHeight').innerHTML=`${s.altitude.toFixed(0)} <em>m</em>`;$('resultGcps').textContent=g.points.length;
     $('resultPhotoDetail').textContent=`${(r.gsd*100).toFixed(2)} cm/pixel`;$('resultGcpDetail').textContent=`At least ${s.minSpacing} m apart`;
-    $('planSummary').textContent=`${r.distance.toFixed(0)} m geometric route · ${r.rounded?'rounded turns':'angular turns'} · ${r.speed.toFixed(2)} m/s · fixed camera heading ${heading(r.axis)}°. All ${plan.points.length} sampled patches meet coverage limits.`;
-    const metrics=[['Minimum terrain clearance',plan.clearance.toFixed(1)+' m'],['Maximum distance to a GCP',g.maxDistance.toFixed(1)+' m'],['Mean GCP GDOP',g.meanGdop.toFixed(3)],['Minimum usable views',Math.min(...plan.analysis.counts)],['Minimum viewing spread',Math.min(...plan.analysis.angles).toFixed(1)+'°'],['Geometric routes checked',searchReport.evaluated_routes],['Midpoint tours attempted',searchReport.midpoint_routes_attempted],['Initial grid distance',searchReport.shortest_grid_seed_m?.toFixed(0)+' m'],['Search limit',searchReport.evaluation_budget_per_altitude+' checks per height']];
+    $('planSummary').textContent=`${r.distance.toFixed(0)} m geometric route · ${r.rounded?'rounded turns':'angular turns'} · ${r.speed.toFixed(2)} m/s · fixed camera heading ${heading(r.axis)}°. Geometric coverage checked at ${plan.points.length} ground samples.`;
+    const metrics=[['Minimum terrain clearance',plan.clearance.toFixed(1)+' m'],['Maximum distance to a GCP',g.maxDistance.toFixed(1)+' m'],['Mean GCP GDOP',g.meanGdop.toFixed(3)],['GCP surface visibility',searchReport.gcp_surface_visibility?'DSM checked':'Ground geometry only'],['Minimum GCP photo views',Math.min(...g.viewCounts)],['Minimum usable views',Math.min(...plan.analysis.counts)],['Minimum viewing spread',Math.min(...plan.analysis.angles).toFixed(1)+'°'],['Geometric routes checked',searchReport.evaluated_routes],['Midpoint tours attempted',searchReport.midpoint_routes_attempted],['Initial grid distance',searchReport.shortest_grid_seed_m?.toFixed(0)+' m'],['Search limit',searchReport.evaluation_budget_per_altitude+' checks per height']];
     $('planMetrics').replaceChildren(...metrics.map(([key,value])=>{const d=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;d.append(dt,dd);return d;}));
     $('coordinateInfo').textContent=site?`${site.crs} · ${site.verticalDatum} heights. Suggested locations; survey these coordinates in the field.`:'Local coordinates in metres from the southwest corner. Suggested locations, not surveyed control.';
     $('gcpRows').replaceChildren(...g.points.map((p,i)=>{const tr=document.createElement('tr');[i+1,p[0]+(site?.west||0),p[1]+(site?.south||0),p[2]].forEach((v,j)=>{const td=document.createElement('td');td.textContent=j===0?String(v):v.toFixed(3);tr.append(td);});return tr;}));
@@ -134,6 +150,11 @@
     draw();
   }
   function draw(){
+    const heatRange=GdopHeatmap.range(plan?.heatmap);
+    $('gdopLegend').hidden=!$('showGdop').checked;
+    $('gdopLegend').textContent=heatRange
+      ?`GDOP ${heatRange.min.toFixed(2)} (green, lower) to ${heatRange.max.toFixed(2)} (red, higher), logarithmic scale. Gray = blocked, unknown, or singular observation geometry. Scores use the current route.`
+      :'Run Find best plan to calculate the GDOP heatmap.';
     const originalMesh=$('surfaceModel').value==='mesh'&&site?.sceneMesh;
     $('surfaceModel').disabled=viewMode==='2d'||!site?.sceneMesh;
     $('verticalScale').disabled=viewMode==='2d'||!!originalMesh;
@@ -143,7 +164,8 @@
       transform=null;
       const {width,height}=dimensions();
       if(Number.isFinite(width)&&Number.isFinite(height)&&width>0&&height>0)
-        terrainView.render({site,width,height,image,plan,boundary,exclusions,terrainAt,
+        terrainView.render({site,width,height,image,plan,boundary,exclusions,terrainAt,surfaceAt,placementAllowed,
+          showGdop:$('showGdop').checked,showPlacement:$('showPlacement').checked,
           showCoverage:$('showCoverage').checked,showMidpoints:$('showMidpoints').checked});
       else{ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,canvas.width,canvas.height);terrainView.surfaceRenderer.canvas.hidden=true;}
       $('surfaceStatus').textContent=terrainView.status;
@@ -164,9 +186,21 @@
     function line(points,color,dash=[],closed=false){if(!points.length)return;ctx.beginPath();ctx.setLineDash(dash);points.forEach((p,i)=>{if(i)ctx.lineTo(...px(p));else ctx.moveTo(...px(p));});if(closed)ctx.closePath();ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);}
     line([[0,0],[width,0],[width,height],[0,height]],'#7997ad80',[],true);
     if(boundary)line(boundary,'#b8f4df',[],true);
+    if($('showPlacement').checked||($('showGdop').checked&&plan)){
+      const points=plan?.points||surfacePoints();
+      const size=Math.max(2,scale*Math.min(width,height)/(site?.gridSize-1||25)*.9);
+      points.forEach((p,i)=>{
+        if($('showGdop').checked&&plan)ctx.fillStyle=GdopHeatmap.color(plan.heatmap?.[i],heatRange);
+        else{if(placementAllowed(p))return;ctx.fillStyle='rgba(242,132,109,.45)';}
+        const [a,b]=px(p);ctx.fillRect(a-size/2,b-size/2,size,size);
+        if($('showPlacement').checked&&$('showGdop').checked&&!placementAllowed(p)){
+          ctx.strokeStyle='#ed866a';ctx.lineWidth=.8;ctx.strokeRect(a-size/2,b-size/2,size,size);
+        }
+      });
+    }
     if(plan&&$('showCoverage').checked){
       const size=Math.max(2,scale*Math.max(width,height)/(site?.gridSize||26)*.8);
-      plan.points.forEach((p,i)=>{const gap=plan.analysis.counts[i]<defaults.minViews||plan.analysis.angles[i]<defaults.minAngle;ctx.fillStyle=gap?'#ff8f80a0':'#6cda9c38';const [a,b]=px(p);ctx.fillRect(a-size/2,b-size/2,size,size);});
+      plan.points.forEach((p,i)=>{const gap=plan.analysis.counts[i]<defaults.minViews||plan.analysis.angles[i]<defaults.minAngle;if($('showGdop').checked&&!gap)return;ctx.fillStyle=gap?'#ff8f80a0':'#6cda9c38';const [a,b]=px(p);ctx.fillRect(a-size/2,b-size/2,size,size);});
     }
     if(plan){
       // Path only: individual photo dots obscure the route at survey scale.
@@ -211,6 +245,8 @@
   canvas.addEventListener('dblclick',()=>{if(viewMode==='3d'){terrainView.reset();draw();}});
   $('cancelSearch').addEventListener('click',()=>PythonPlanner.cancel());
   $('showMidpoints').addEventListener('change',draw);
+  $('showGdop').addEventListener('change',draw);
+  $('showPlacement').addEventListener('change',draw);
   function updateCountMode(){
     const fixed=$('gcpMode').value==='fixed';
     $('countRange').hidden=fixed;$('minGcps').disabled=fixed;

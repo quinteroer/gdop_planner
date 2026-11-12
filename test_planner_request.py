@@ -32,6 +32,12 @@ class RequestTests(unittest.TestCase):
         self.assertGreaterEqual(result['plan']['photo_interval_s'],2)
         self.assertLessEqual(result['plan']['gcp_count'],6)
 
+    def test_placement_mask_filters_candidates(self):
+        self.request['placementGrid']={'gridSize':2,'allowed':[False,False,False,False]}
+        self.assertIsNone(plan_request(self.request)['plan'])
+        self.request['avoidRaisedCover']=False
+        self.assertIsNotNone(plan_request(self.request)['plan'])
+
     def test_invalid_range(self):
         self.request['limits']['minAltitude']=80
         with self.assertRaisesRegex(ValueError,'Check limit ranges'):

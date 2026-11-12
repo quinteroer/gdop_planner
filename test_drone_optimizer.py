@@ -73,6 +73,39 @@ class OptimizerTests(unittest.TestCase):
             for t in (.25,.5,.75):
                 self.assertTrue(_inside((a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1])),fence))
 
+    def test_placement_filter_is_hard_constraint(self):
+        result=optimize(self.points,**self.options,gcp_allowed=lambda p:p[0]<=20)
+        self.assertIsNotNone(result['plan'])
+        plan=result['plan']
+        self.assertTrue(all(p[0]<=20 for p in plan['gcps']))
+        self.assertTrue(all(not plan['placement_allowed'][i] for i,p in enumerate(result['points']) if p[0]>20))
+        rejected=optimize(self.points,**self.options,gcp_allowed=lambda p:False)
+        self.assertIsNone(rejected['plan'])
+        self.assertEqual(rejected['diagnostics']['evaluated_routes'],0)
+
+    def test_canopy_removes_observations_from_gdop_matrix(self):
+        from drone_optimizer import _analyze
+        camera={'sensor_width_mm':4,'sensor_height_mm':3,'focal_length_mm':3,'heading_deg':0}
+        photos=[(-5,-5,35),(5,-5,35),(-5,5,35),(5,5,35)]
+        bare=_analyze([(0,0,0)],photos,camera,None,1)[0]
+        covered=_analyze([(0,0,0)],photos,camera,lambda x,y:8,1,occlusion_tolerance=.5)[0]
+        self.assertTrue(math.isfinite(bare['gdop']))
+        self.assertEqual(covered['views'],0)
+        self.assertEqual(covered['gdop'],math.inf)
+
+    def test_intervening_cover_removes_camera_rows(self):
+        from drone_optimizer import _analyze
+        camera={'sensor_width_mm':4,'sensor_height_mm':3,'focal_length_mm':3,'heading_deg':0}
+        photos=[(-5,-5,35),(5,-5,35),(-5,5,35),(5,5,35)]
+        wall=lambda x,y:30 if 2<x<4 else 0
+        observed=_analyze([(0,0,0)],photos,camera,wall,.5,occlusion_tolerance=.5)[0]
+        self.assertEqual(observed['views'],2)
+        self.assertEqual(observed['gdop'],math.inf)
+
+    def test_surface_visibility_rejects_hidden_targets(self):
+        result=optimize(self.points,**self.options,surface_at=lambda x,y:100)
+        self.assertIsNone(result['plan'])
+
     def test_count_search_and_pure_gdop_ranking(self):
         result = optimize(self.points,**{**self.options,'gcp_count':(3,6),'min_gcp_spacing':0})
         plan = result['plan']

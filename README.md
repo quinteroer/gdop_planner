@@ -29,6 +29,16 @@ Advanced settings control height range, clearance, minimum photo overlaps, shutt
 
 An imaging polygon limits the surveyed samples and GCP candidates. It is not a flight fence. GCP exclusion circles affect target placement. Terrain line-of-sight checks reject hidden views, unknown terrain, and insufficient clearance along the sampled route. Unknown terrain can therefore make an otherwise plausible plan fail.
 
+## Tree and building screening and GDOP heatmap
+
+**Keep targets clear of trees and buildings** is on by default for the supplied sites. Full-resolution DSM minus DTM screening rejects raised cover over 1 m within 2.5 m of each candidate, along with unknown raster data. This is a conservative raised-cover screen for canopy, buildings and other objects. It is not a semantic tree classification. Manual exclusions remain available for missed vegetation, water, inaccessible areas and changed conditions. Custom areas without surface data explicitly show that automatic screening is unavailable.
+
+GDOP is recomputed for every ground sample using only cameras with an unblocked observation ray through the DSM height field, with a 0.5 m allowance for surface/ground model disagreement. A ground target below the modelled opaque canopy or roof has no observation rows. Too few or singular observations produce infinite/undefined GDOP, which is displayed as no valid geometry. Cameras inside modelled cover also contribute no observations. This surface-aware calculation remains active when the optional placement buffer is turned off. Placement screening is an additional hard eligibility constraint before selection. Invisible or poorly observed candidates cannot be selected. The surface model checks GCP visibility. Flight clearance continues to use the existing terrain-clearance model, with optional terrain line of sight.
+
+**Show placement screening** overlays rejected areas. **GDOP heatmap** overlays the current route's surface-aware ground-sample scores in 2D and 3D. Green means lower GDOP and red means higher GDOP, using a relative logarithmic scale with numeric limits in the legend. Gray marks blocked or unknown targets and singular observation geometry. Finite GDOP scores are shown independently of the extra placement buffer; Show placement screening displays those restrictions. The overlay is available after optimization and never changes the plan or export state. Scores and target eligibility are recomputed when planning requirements change.
+
+Rebuild these fields with `python prepare_placement.py` after generating new site terrain data. The build script needs numpy and Pillow and reads the original DSM and DTM GeoTIFFs without modifying them.
+
 ## Call the Python function
 
 No additional Python packages are needed.
@@ -53,7 +63,7 @@ if plan is not None:
     control_points = plan['gcps']
 ```
 
-All coordinates and distances are local metres. The Python docstring documents camera parameters, optional start/end transit positions, a separate simple flight boundary, terrain callbacks, progress callbacks, and the search budget. `plan` is null when the sampled search finds no accepted route. Python raises ValueError for invalid settings.
+All coordinates and distances are local metres. The Python function also accepts `gcp_allowed(point)` for a hard placement filter and `surface_at(x,y)` for surface-aware GCP observation visibility. The Python docstring documents camera parameters, optional start/end transit positions, a separate simple flight boundary, terrain callbacks, progress callbacks, and the search budget. `plan` is null when the sampled search finds no accepted route. Python raises ValueError for invalid settings.
 
 ## Algorithm and limits
 
@@ -70,7 +80,9 @@ Distance to control and GDOP are planning metrics. Validate mapping accuracy wit
 ## Files
 
 - `drone_optimizer.py` is the standalone Python implementation.
-- `planner_request.py` converts visualizer settings to the function call.
+- `planner_request.py` converts visualizer settings, placement masks, and surface grids to the function call.
+- `gdop-heatmap.js` supplies the shared 2D/3D GDOP color scale.
+- `prepare_placement.py` prepares DSM/DTM placement screening and surface-height grids.
 - `python-worker.js` loads Pyodide and executes that same Python code.
 - `python-planner.js` manages worker progress/cancellation and adapts results for drawing and CSV exports.
 - `terrain-view.js` handles orbit controls, shaded ground terrain, and planning overlays.
@@ -91,6 +103,6 @@ node network.test.cjs
 node capture-planning.test.cjs
 ```
 
-With Playwright and Chromium installed, `node verify-python.cjs` starts a temporary static server and checks the actual browser Python worker, count search, rounded route, capture exports, failure, cancellation/retry, and mobile layout. Set PLAYWRIGHT_MODULE and CHROMIUM_PATH when using bundled browser tools. The browser test needs internet access for Pyodide. `node verify-3d.cjs` checks original-mesh loading, ground-mode switching, real elevation ranges, mouse and touch controls, keyboard/reset, automatic 2D editing, the actual Python route overlay, and mobile layout. It uses the same browser environment variables. The older `verify.cjs` and `verify-capture.cjs` now expect the static server at port 8000, or GDOP_TEST_URL. Their existing bundled Playwright paths remain supported.
+With Playwright and Chromium installed, `node verify-python.cjs` starts a temporary static server and checks the actual browser Python worker, count search, rounded route, capture exports, failure, cancellation/retry, and mobile layout. Set PLAYWRIGHT_MODULE and CHROMIUM_PATH when using bundled browser tools. The browser test needs internet access for Pyodide. `node verify-3d.cjs` checks original-mesh loading, ground-mode switching, real elevation ranges, mouse and touch controls, keyboard/reset, automatic 2D editing, the actual Python route overlay, and mobile layout. It uses the same browser environment variables. `node verify-placement.cjs` checks actual Spring Run targets against the prepared placement mask, surface-aware scores, heatmaps in both views, and settings invalidation. The older `verify.cjs` and `verify-capture.cjs` now expect the static server at port 8000, or GDOP_TEST_URL. Their existing bundled Playwright paths remain supported.
 
 Adapted from https://github.com/quinteroer/gdop_planner.
