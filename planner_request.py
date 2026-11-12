@@ -73,4 +73,4 @@ def plan_request(payload, on_progress=None):
         turn_radius=payload.get('turnRadius',5),
         max_route_evaluations=payload.get('searchBudget',120),
         objective=limits['priority'],on_progress=on_progress,
-        gcp_allowed=gcp_allowed,surface_at=surface_at)
+        gcp_allowed=gcp_allowed,surface_at=surface_at,use_sample_bounds=True)

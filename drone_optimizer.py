@@ -204,6 +204,19 @@ def _select_gcps(points, analysis, count, spacing, exclusions, allowed=None):
     return []
 
 
+def _spread_order(count):
+    """Visit the middle, quarters, eighths, etc. before adjacent positions."""
+    pending=[(0,count-1)]
+    order=[]
+    for low,high in pending:
+        if low>high:
+            continue
+        middle=(low+high)//2
+        order.append(middle)
+        pending.extend(((low,middle-1),(middle+1,high)))
+    return order
+
+
 def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
              gcp_count=(3, 12), max_gcp_distance=None, min_gcp_spacing=16.0,
              camera=None, forward_overlap=.8, side_overlap=.8,
@@ -214,7 +227,7 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
              exclusions=(), start=None, end=None, turn_radius=5.0,
              path_step=2.0, improvement_passes=2, objective="distance",
              max_route_evaluations=None, on_progress=None,
-             gcp_allowed=None, surface_at=None):
+             gcp_allowed=None, surface_at=None, use_sample_bounds=False):
     """Return {'plan': dict or None, 'diagnostics': dict}.
 
     All coordinates and distances are local metres. Camera defaults model the
@@ -235,6 +248,9 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
     checks GCP observation rays against a canopy/building surface model.
     Surface checks allow 0.5 m for DSM/DTM ground-model disagreement.
 
+    Set use_sample_bounds=True to seed routes within the bounding extent of
+    supplied terrain samples. Otherwise width and height define the seed extent.
+    Refinement is distributed across feasible candidates and across each route.
     Routes compare coverage grids against midpoint-based tours, reorder using
     nearest-neighbour and 2-opt, and remove waypoints only after full revalidation.
     max_route_evaluations optionally bounds refinement work per altitude.
@@ -298,6 +314,8 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
     points = [p for p in points if _inside(p, boundary)]
     if not points:
         raise ValueError('No terrain samples inside the imaging boundary')
+    survey_bounds=(min(p[0] for p in points),min(p[1] for p in points),
+                   max(p[0] for p in points),max(p[1] for p in points)) if use_sample_bounds else (0,0,width,height)
     placement_allowed=[bool(gcp_allowed(p)) if gcp_allowed else True for p in points]
     for endpoint in (start, end):
         if endpoint is not None and (len(endpoint) != 2 or not all(math.isfinite(v) for v in endpoint) or not _inside(endpoint, flight_boundary)):
@@ -330,6 +348,7 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
     best = None
     seed_distances = []
     midpoint_trials = 0
+    refinement_checks = []
 
     def segment_valid(a, b):
         # Include all boundary crossing parameters, not just regular samples.
@@ -407,6 +426,7 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
             failures['insufficient_open_ground']=1
             break
         altitude_evaluations = 0
+        candidate_limit = None
         elevation = ground + altitude
         highest, lowest = max(p[2] for p in points), min(p[2] for p in points)
         if elevation-highest < min_clearance:
@@ -427,7 +447,8 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
 
         def evaluate(nodes, radius):
             nonlocal evaluated, altitude_evaluations
-            if max_route_evaluations is not None and altitude_evaluations >= max_route_evaluations:
+            if ((max_route_evaluations is not None and altitude_evaluations >= max_route_evaluations) or
+                    (candidate_limit is not None and altitude_evaluations >= candidate_limit)):
                 return None
             evaluated += 1
             altitude_evaluations += 1
@@ -503,7 +524,9 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
             gap_x,gap_y = gap_y,gap_x
         elif abs(math.sin(yaw))>1e-8:
             gap_x = gap_y = min(gap_x,gap_y)/math.sqrt(2)
-        nx, ny = max(1,math.ceil(width/gap_x)),max(1,math.ceil(height/gap_y))
+        west,south,east,north=survey_bounds
+        survey_width,survey_height=east-west,north-south
+        nx, ny = max(1,math.ceil(survey_width/gap_x)),max(1,math.ceil(survey_height/gap_y))
         if min(nx,ny)*2>max_photos:
             failures['seed_budget'] += 1
             continue
@@ -512,7 +535,7 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
             nodes = []
             for i in range(across+1):
                 for j in ((0,along) if i%2==0 else (along,0)):
-                    point = (j*width/nx,i*height/ny) if swap else (i*width/nx,j*height/ny)
+                    point = (west+j*survey_width/nx,south+i*survey_height/ny) if swap else (west+i*survey_width/nx,south+j*survey_height/ny)
                     if _inside(point,flight_boundary):
                         nodes.append(point)
             if start is not None:
@@ -537,7 +560,15 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
                         trial = evaluate(tour,0)
                         if trial is not None:
                             candidates.append((tour,trial,midpoint_nodes))
-        for nodes, seed, midpoint_nodes in candidates:
+        candidates.sort(key=lambda candidate:rank(candidate[1]))
+        for candidate_index,(nodes,seed,midpoint_nodes) in enumerate(candidates):
+            # Reserve work for every feasible alternative instead of letting the
+            # first grid consume the entire altitude's refinement budget.
+            if max_route_evaluations is not None:
+                remaining=max_route_evaluations-altitude_evaluations
+                share=max(0,remaining//(len(candidates)-candidate_index))
+                candidate_limit=altitude_evaluations+share
+            candidate_start=altitude_evaluations
             current = seed
             for radius in dict.fromkeys((turn_radius,0)):
                 trial = evaluate(nodes,radius)
@@ -546,18 +577,28 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
             # Full geometry and coverage revalidation on every accepted deletion.
             for _ in range(improvement_passes):
                 improved = False
-                i = 1 if start is not None else 0
-                while i < len(nodes)-(1 if end is not None else 0) and len(nodes)>2:
-                    if max_route_evaluations is not None and altitude_evaluations >= max_route_evaluations:
+                free=list(range(1 if start is not None else 0,
+                                len(nodes)-(1 if end is not None else 0)))
+                spread={free[i]:position for position,i in enumerate(_spread_order(len(free)))}
+                def removal_gain(i):
+                    before=travel(nodes[i-1],nodes[i]) if i else 0
+                    after=travel(nodes[i],nodes[i+1]) if i+1<len(nodes) else 0
+                    shortcut=travel(nodes[i-1],nodes[i+1]) if i and i+1<len(nodes) else 0
+                    return before+after-shortcut
+                targets=[nodes[i] for i in sorted(free,key=lambda i:(-round(removal_gain(i),6),spread[i]))]
+                for target in targets:
+                    if ((max_route_evaluations is not None and altitude_evaluations>=max_route_evaluations) or
+                            (candidate_limit is not None and altitude_evaluations>=candidate_limit)):
                         break
-                    reduced = nodes[:i]+nodes[i+1:]
-                    trials = [evaluate(reduced,r) for r in dict.fromkeys((turn_radius,0))]
-                    valid = [r for r in trials if r is not None]
-                    trial = min(valid,key=rank) if valid else None
-                    if trial and rank(trial) < rank(current) and trial['distance_m'] < current['distance_m']-1e-8:
-                        nodes,current,improved = reduced,trial,True
-                    else:
-                        i += 1
+                    i=nodes.index(target)
+                    if (i==0 and start is not None) or (i==len(nodes)-1 and end is not None) or len(nodes)<=2:
+                        continue
+                    reduced=nodes[:i]+nodes[i+1:]
+                    trials=[evaluate(reduced,r) for r in dict.fromkeys((turn_radius,0))]
+                    valid=[r for r in trials if r is not None]
+                    trial=min(valid,key=rank) if valid else None
+                    if trial and rank(trial)<rank(current) and trial['distance_m']<current['distance_m']-1e-8:
+                        nodes,current,improved=reduced,trial,True
                 if not improved:
                     break
             # Try moving a nearby free waypoint onto a midpoint of the GCPs
@@ -578,6 +619,8 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
                     if trial and rank(trial) < rank(current):
                         nodes,current = moved,trial
             midpoint_nodes = list(dict.fromkeys(midpoint_nodes+current_midpoints))
+            refinement_checks.append({'altitude_m':altitude,'candidate':candidate_index,
+                                      'checks':altitude_evaluations-candidate_start})
             current['midpoints_considered'] = midpoint_nodes
             # Report passage relative to the returned GCP set, since ranking can
             # change after camera locations change during route refinement.
@@ -602,4 +645,7 @@ def optimize(points, *, width, height, ground=None, altitudes=(35.0,),
             'terrain_check':'Sampled height callback' if terrain_at else 'Highest supplied terrain sample',
             'midpoint_rule':'Pairwise GCP midpoints are optional route candidates',
             'eligible_gcp_samples':sum(placement_allowed),
+            'survey_bounds_m':survey_bounds,
+            'refinement_order':'Largest shortcut first, spatially distributed tie breaks',
+            'refinement_checks':refinement_checks,
             'gcp_surface_visibility':surface_at is not None}}

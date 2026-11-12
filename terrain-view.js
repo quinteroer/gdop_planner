@@ -97,17 +97,28 @@
       const bounds=meshReady?record.manifest.bounds:[[0,0,this.zMin],[scene.width,scene.height,this.zMax]];
       this.status=requested?(record.error|| (record.loading?'Loading original textured 3D mesh…':`Original textured 3D mesh · ${record.manifest.source} · ${(record.manifest.vertices/3).toLocaleString()} triangles`))
         :(scene.site?'Ground DTM · bare-earth elevations, shaded without overhead imagery':'Custom flat ground at 0 m');
-      const low=[Math.min(0,bounds[0][0]),Math.min(0,bounds[0][1]),Math.min(this.zMin,bounds[0][2])];
-      const high=[Math.max(scene.width,bounds[1][0]),Math.max(scene.height,bounds[1][1]),Math.max(this.zMax,bounds[1][2],scene.plan?.cams[0]?.[2]??this.zMax)];
+      const low=bounds[0].slice(),high=bounds[1].slice();
+      if(scene.plan)for(const point of [...scene.plan.path.map(p=>p.position),...scene.plan.gcps.points]){
+        point.forEach((v,i)=>{low[i]=Math.min(low[i],v);high[i]=Math.max(high[i],v);});
+      }
       const center=low.map((v,i)=>(v+high[i])/2);
       const radius=Math.max(1,Math.hypot(high[0]-low[0],high[1]-low[1],(high[2]-low[2])*this.exaggeration)/2);
       if(!meshReady){this.surfaceRenderer.canvas.hidden=true;ctx.fillStyle='#152938';ctx.fillRect(0,0,w,h);}
       else ctx.clearRect(0,0,w,h);
       const focal=h/(2*Math.tan(Math.PI/8));
-      // Fit both narrow phone canvases and wide desktop canvases.
-      const fov=Math.min(Math.PI/4,2*Math.atan(w/(2*focal)));
-      const distance=Math.max(radius*1.15,radius/Math.sin(fov/2)*1.1*this.zoom);
       const cy=Math.cos(this.yaw),sy=Math.sin(this.yaw),cp=Math.cos(this.pitch),sp=Math.sin(this.pitch);
+      let fittedDistance=1,front=0;
+      // Fit actual projected bounds rather than a sphere enclosing blank map
+      // margins. This keeps long, narrow sites readable without manual zoom.
+      for(const x of [low[0],high[0]])for(const y of [low[1],high[1]])for(const z of [low[2],high[2]]){
+        const dx=x-center[0],dy=y-center[1],dz=(z-center[2])*this.exaggeration;
+        const toward=dx*cy*cp+dy*sy*cp+dz*sp;
+        const horizontal=-dx*sy+dy*cy,vertical=-dx*cy*sp-dy*sy*sp+dz*cp;
+        front=Math.max(front,toward);
+        fittedDistance=Math.max(fittedDistance,toward+Math.abs(horizontal)*focal/Math.max(1,w/2-35),
+                                toward+Math.abs(vertical)*focal/Math.max(1,h/2-35));
+      }
+      const distance=Math.max(front+radius*.08,fittedDistance*this.zoom);
       const project=point=>{
         const x=point[0]-center[0],y=point[1]-center[1],z=(point[2]-center[2])*this.exaggeration;
         const depth=distance-x*cy*cp-y*sy*cp-z*sp;
@@ -181,11 +192,14 @@
           ctx.font='600 11px Segoe UI, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#3b341f';ctx.fillText(i+1,q.x,q.y+.5);
         });
       }
-      // World axes make viewpoint changes explicit and retain a true north cue.
-      const origin=[scene.width,0,floor],axisLength=Math.max(scene.width,scene.height)*.12;
-      for(const [delta,label,color] of [[[axisLength,0,0],'E','#f1b4a9'],[[0,axisLength,0],'N','#b5e5bd'],[[0,0,axisLength],'Z','#a5d8ff']]){
-        const tip=origin.map((v,i)=>v+delta[i]);line([origin,tip],color,2);
-        const q=project(tip);ctx.fillStyle=color;ctx.font='11px Segoe UI, sans-serif';ctx.textAlign='left';ctx.fillText(label,q.x+4,q.y);
+      // Screen-space compass follows the actual world-axis directions.
+      const origin=[w-65,h-55];
+      for(const [delta,label,color] of [[[1,0,0],'E','#f1b4a9'],[[0,1,0],'N','#b5e5bd'],[[0,0,1],'Z','#a5d8ff']]){
+        const [dx,dy,dz]=delta;
+        const x=origin[0]+(-dx*sy+dy*cy)*35;
+        const y=origin[1]-(-dx*cy*sp-dy*sy*sp+dz*cp)*35;
+        ctx.beginPath();ctx.moveTo(...origin);ctx.lineTo(x,y);ctx.strokeStyle=color;ctx.lineWidth=2;ctx.stroke();
+        ctx.fillStyle=color;ctx.font='11px Segoe UI, sans-serif';ctx.textAlign='left';ctx.fillText(label,x+4,y);
       }
       ctx.fillStyle='#d4e8e9';ctx.font='11px Segoe UI, sans-serif';ctx.textAlign='left';
       ctx.fillText(`${this.exaggeration}× vertical scale`,15,h-17);

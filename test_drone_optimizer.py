@@ -73,6 +73,21 @@ class OptimizerTests(unittest.TestCase):
             for t in (.25,.5,.75):
                 self.assertTrue(_inside((a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1])),fence))
 
+    def test_partial_survey_extent_and_distributed_refinement(self):
+        from drone_optimizer import _spread_order
+        order=_spread_order(32)
+        self.assertEqual(sorted(order),list(range(32)))
+        self.assertGreater(max(order[:7])-min(order[:7]),20)
+        points=[(p[0]+30,p[1]+40,p[2]) for p in self.points]
+        result=optimize(points,**{**self.options,'width':150,'height':120,'improvement_passes':1},
+                        max_route_evaluations=60,use_sample_bounds=True)
+        plan=result['plan']
+        self.assertIsNotNone(plan)
+        self.assertEqual(result['diagnostics']['survey_bounds_m'],(30,40,90,80))
+        self.assertTrue(all(30-1e-7<=p[0]<=90+1e-7 and 40-1e-7<=p[1]<=80+1e-7 for p in plan['path']))
+        self.assertGreater(sum(r['checks']>0 for r in result['diagnostics']['refinement_checks']),1)
+        self.assertLessEqual(result['diagnostics']['evaluated_routes'],60)
+
     def test_placement_filter_is_hard_constraint(self):
         result=optimize(self.points,**self.options,gcp_allowed=lambda p:p[0]<=20)
         self.assertIsNotNone(result['plan'])

@@ -1,6 +1,6 @@
 # Flight and GCP Planner
 
-The visualizer runs the callable Python geometric optimizer in a browser worker. It searches GCP-pair midpoints, reorders waypoints using nearest-neighbour and 2-opt, removes detours, and evaluates rounded turns. Every accepted route passes the sampled photo-coverage and GDOP checks.
+The visualizer runs the callable Python geometric optimizer in a browser worker. It searches GCP-pair midpoints, reorders waypoints using nearest-neighbour and 2-opt, removes detours, and evaluates rounded turns. Visualizer route seeds cover the bounding extent of the supplied terrain samples rather than empty orthomosaic margins. Refinement evaluates the largest shortcuts first, distributes equal-gain attempts across the route, and reserves work for every feasible alternative. Every accepted route passes the sampled photo-coverage and GDOP checks.
 
 ## Open the visualizer
 
@@ -21,7 +21,7 @@ The map opens in **3D terrain** using **Original 3D mesh** for the supplied site
 
 Choose **Ground elevations (DTM)** to inspect the bare-earth height samples as a shaded surface. This view deliberately uses no overhead image texture, so roof pixels cannot be mistaken for building geometry. The optional 2× and 5× vertical scales apply only to this ground view and affect display only. The three supplied sites use 51 × 51 DTM grids for optimization, with missing samples left as gaps. Custom dimension-only areas use flat ground at 0 m. The 2D map continues to use the orthomosaic.
 
-Drag to orbit, scroll to zoom, and Shift-drag or right-drag to pan. Touch supports a two-finger pinch and pan. Arrow keys rotate, plus/minus zoom, and zero resets the camera. **Reset view** restores the initial viewpoint. The scene mesh uses WebGL depth testing. If WebGL or mesh loading is unavailable, a labelled ground view is shown.
+Drag to orbit, scroll to zoom, and Shift-drag or right-drag to pan. Touch supports a two-finger pinch and pan. Arrow keys rotate, plus/minus zoom, and zero resets the camera. **Reset view** restores the initial viewpoint and fits the actual model and route to the canvas. The scene mesh uses WebGL depth testing. If WebGL or mesh loading is unavailable, a labelled ground view is shown.
 
 Use **2D map** for boundary and exclusion editing. Choosing a drawing tool automatically switches to the top-down view. Returning to 3D retains accepted boundaries, exclusions, and optimization results. Ground targets and the airborne route share the same projected coordinate system. Labels and route lines overlay the mesh for visibility. Mesh display is separate from the existing DTM-based optimization.
 
@@ -63,7 +63,7 @@ if plan is not None:
     control_points = plan['gcps']
 ```
 
-All coordinates and distances are local metres. The Python function also accepts `gcp_allowed(point)` for a hard placement filter and `surface_at(x,y)` for surface-aware GCP observation visibility. The Python docstring documents camera parameters, optional start/end transit positions, a separate simple flight boundary, terrain callbacks, progress callbacks, and the search budget. `plan` is null when the sampled search finds no accepted route. Python raises ValueError for invalid settings.
+All coordinates and distances are local metres. Direct Python callers can set `use_sample_bounds=True` to seed routes around their known terrain samples. Otherwise the supplied width and height retain their rectangular mission extent. The Python function also accepts `gcp_allowed(point)` for a hard placement filter and `surface_at(x,y)` for surface-aware GCP observation visibility. The Python docstring documents camera parameters, optional start/end transit positions, a separate simple flight boundary, terrain callbacks, progress callbacks, and the search budget. `plan` is null when the sampled search finds no accepted route. Python raises ValueError for invalid settings.
 
 ## Algorithm and limits
 
@@ -103,6 +103,6 @@ node network.test.cjs
 node capture-planning.test.cjs
 ```
 
-With Playwright and Chromium installed, `node verify-python.cjs` starts a temporary static server and checks the actual browser Python worker, count search, rounded route, capture exports, failure, cancellation/retry, and mobile layout. Set PLAYWRIGHT_MODULE and CHROMIUM_PATH when using bundled browser tools. The browser test needs internet access for Pyodide. `node verify-3d.cjs` checks original-mesh loading, ground-mode switching, real elevation ranges, mouse and touch controls, keyboard/reset, automatic 2D editing, the actual Python route overlay, and mobile layout. It uses the same browser environment variables. `node verify-placement.cjs` checks actual Spring Run targets against the prepared placement mask, surface-aware scores, heatmaps in both views, and settings invalidation. The older `verify.cjs` and `verify-capture.cjs` now expect the static server at port 8000, or GDOP_TEST_URL. Their existing bundled Playwright paths remain supported.
+With Playwright and Chromium installed, `node verify-python.cjs` starts a temporary static server and checks the actual browser Python worker, count search, rounded route, capture exports, failure, cancellation/retry, and mobile layout. Set PLAYWRIGHT_MODULE and CHROMIUM_PATH when using bundled browser tools. The browser test needs internet access for Pyodide. `node verify-3d.cjs` checks original-mesh loading, ground-mode switching, real elevation ranges, mouse and touch controls, keyboard/reset, automatic 2D editing, the actual Python route overlay, and mobile layout. It uses the same browser environment variables. `node verify-placement.cjs` checks actual Spring Run targets against the prepared placement mask, surface-aware scores, heatmaps in both views, and settings invalidation. `node verify-route-extent.cjs` reproduces the Williams Island uneven-strip case and verifies the shortened route stays within the known terrain-sample bounds while preserving photo timing, screened GCPs, and the GDOP overlay. The older `verify.cjs` and `verify-capture.cjs` now expect the static server at port 8000, or GDOP_TEST_URL. Their existing bundled Playwright paths remain supported.
 
 Adapted from https://github.com/quinteroer/gdop_planner.
